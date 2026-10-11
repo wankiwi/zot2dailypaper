@@ -13,6 +13,19 @@ from pathlib import Path
 _CONFIG_DIR = str(Path(__file__).resolve().parent.parent / "config")
 
 
+@pytest.fixture(autouse=True)
+def isolated_price_checks(monkeypatch, tmp_path):
+    """No live public checks or real price-state files in unit tests."""
+    from zot2dailypaper import pricing
+    pricing._attempts.clear()
+    monkeypatch.setattr(pricing, 'CACHE_PATH', tmp_path / 'llm_pricing.json')
+
+    def unavailable(*args):
+        raise pricing.PricingUnavailable('offline_test')
+
+    monkeypatch.setattr(pricing, '_fetch_public', unavailable)
+
+
 @pytest.fixture(scope="session")
 def _base_config():
     """Session-scoped Hydra config with all required values filled in.

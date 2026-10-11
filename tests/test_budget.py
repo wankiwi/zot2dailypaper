@@ -314,7 +314,9 @@ def test_stale_pricing_warns_continues_and_renders_email(config,monkeypatch):
     assert 'Stale LLM pricing' in html and 'Stale LLM pricing' in email_plain_text(html)
     assert '实际费用可能超过' in html
     monkeypatch.setattr(budget,'utc_day',lambda:'2026-10-08')
-    assert not budget.pricing_warning()
+    # The reviewed seed is fresh on this date, but the automatic check failed.
+    assert 'Stale LLM pricing' not in budget.pricing_warning()
+    assert 'Automatic pricing verification unavailable' in budget.pricing_warning()
 
 
 @pytest.mark.parametrize('daily_cny,expected', [(.20, 23), (.30, 34)])

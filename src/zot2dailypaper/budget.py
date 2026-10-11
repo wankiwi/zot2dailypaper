@@ -18,6 +18,7 @@ from .llm import ModelRequests, request_policy
 from .budget_calendar import (LOCAL_TIMEZONE, LedgerInvalid, window_at, migrated_ledger, legacy_digest,
                               validate_local, overlapping_legacy, next_unblocked_window)
 from loguru import logger
+from .pricing import review
 
 class BudgetUnavailable(RuntimeError):
     def __init__(self, message, *, reason='budget_guard_unavailable', day=None, retry_at=None, timezone_name='UTC'):
@@ -51,11 +52,16 @@ def budget_now():
 
 
 def pricing_warning():
-    if VERIFIED_PRICING and utc_day() > VERIFIED_PRICING['valid_through']:
+    if not VERIFIED_PRICING:
+        return ''
+    pricing, status, _ = review(VERIFIED_PRICING, utc_day())
+    prefix = ('LLM 价格自动核验未完成；保留最后确认的保守估算和配置的每日额度，不暂停 LLM。 '
+              'Automatic pricing verification unavailable. ') if status == 'unavailable' else ''
+    if utc_day() > pricing['valid_through']:
         return ('LLM 价格复核已过期：继续按最后复核费率估算并执行配置的每日记账额度；'
                 '若供应商涨价，实际费用可能超过估算及配置额度，请尽快复核价格。'
-                ' Stale LLM pricing: estimates may understate actual charges.')
-    return ''
+                ' Stale LLM pricing: estimates may understate actual charges. ' + prefix)
+    return prefix
 
 
 def budget_plan(config):
@@ -84,6 +90,10 @@ def budget_plan(config):
         raise BudgetUnavailable('Endpoint does not match the verified pricing record')
     if config.generation_kwargs.get('model') != pricing['model']:
         raise BudgetUnavailable('Model does not match the verified pricing record')
+    pricing, status, _ = review(VERIFIED_PRICING, utc_day())
+    if status == 'verified':
+        logger.info('LLM pricing automatically verified for {} on {}; conservative input/output CNY per million: {}/{}',
+                    pricing['model'], pricing['checked_at'], pricing['input_cny_per_million'], pricing['output_cny_per_million'])
     warning = pricing_warning()
     if warning:
         logger.warning(warning)

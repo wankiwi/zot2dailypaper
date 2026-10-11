@@ -145,6 +145,8 @@ def test_state_branch_roundtrip_preserves_working_branch_and_user_index(tmp_path
     index = git('write-tree', cwd=checkout)
     (checkout / 'data').mkdir()
     (checkout / 'data/recommendations.json').write_text('{"version":1,"records":{}}')
+    receipt = '{"version":1,"currency":"CNY","verified_at":"2026-10-11T00:00:00+00:00"}'
+    (checkout / 'data/llm_pricing.json').write_text(receipt)
     script = ROOT / 'scripts/workflow_state.py'
     subprocess.run([sys.executable, str(script), 'save'], cwd=checkout, check=True)
     first = git('ls-remote', 'origin', 'refs/heads/paper-state', cwd=checkout)
@@ -152,8 +154,10 @@ def test_state_branch_roundtrip_preserves_working_branch_and_user_index(tmp_path
     subprocess.run([sys.executable, str(script), 'save'], cwd=checkout, check=True)
     assert git('ls-remote', 'origin', 'refs/heads/paper-state', cwd=checkout) == first
     (checkout / 'data/recommendations.json').unlink()
+    (checkout / 'data/llm_pricing.json').unlink()
     subprocess.run([sys.executable, str(script), 'restore'], cwd=checkout, check=True)
     assert '"version":1' in (checkout / 'data/recommendations.json').read_text()
+    assert (checkout / 'data/llm_pricing.json').read_text().strip() == receipt
     assert git('branch', '--show-current', cwd=checkout) == b'main'
     assert git('write-tree', cwd=checkout) == index
     assert (checkout / 'README').read_text() == 'User change'
