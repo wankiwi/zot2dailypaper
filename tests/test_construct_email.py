@@ -128,3 +128,25 @@ def test_affiliations_are_shortened_before_html_escaping():
     html = render_email([paper], affiliation_max_chars=35)
     assert '<unsafe>' not in html and short in email_plain_text(html)
     assert len(short) <= 35 and paper.affiliations == affiliations
+
+
+def test_button_spacing_and_short_zotero_label_preserve_confirmation_link():
+    from html.parser import HTMLParser
+    from zot2dailypaper.zotero_action import confirmation_link
+    paper = make_sample_paper(doi='10.1000/example', pdf_url='https://example.org/paper.pdf')
+    origin = 'https://zot2dailypaper-save.wankaiweii.workers.dev'
+    html = render_email([paper], zotero_action_origin=origin)
+    class Buttons(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.tables, self.spacers, self.links = 0, 0, []
+        def handle_starttag(self, tag, attrs):
+            attrs = dict(attrs)
+            if tag == 'table' and attrs.get('class') == 'paper-action': self.tables += 1
+            if tag == 'td' and 'padding:4px 20px 4px 0;' in attrs.get('style', ''): self.spacers += 1
+            if tag == 'a': self.links.append(attrs.get('href'))
+    parsed = Buttons()
+    parsed.feed(html)
+    assert parsed.tables == parsed.spacers == 3
+    assert confirmation_link(paper, origin) in parsed.links
+    assert '保存到 Zotero</a>' in html and '需登录确认' not in html

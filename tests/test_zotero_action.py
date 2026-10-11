@@ -18,7 +18,7 @@ def test_email_action_has_only_public_paper_identifier():
     assert link=='https://papers.example.org/zotero/confirm?paper='+hashlib.sha256(paper_id(paper).encode()).hexdigest()
     html=render_email([paper],zotero_action_origin='https://papers.example.org')
     assert link in html and link in email_plain_text(html)
-    assert '需登录确认' in html
+    assert '保存到 Zotero' in html and '需登录确认' not in html
     assert '<form' not in html and 'api.zotero.org' not in html
 
 @pytest.mark.parametrize('origin',['http://papers.example.org','https://user:secret@papers.example.org',

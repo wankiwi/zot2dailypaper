@@ -6,7 +6,8 @@ import subprocess
 from tempfile import TemporaryDirectory
 
 BRANCH = 'paper-state'
-FILES = {'recommendations.json': 'data/recommendations.json', 'journal_catalog.json': 'data/journal_catalog.json', 'feed.xml': 'public/feed.xml'}
+FILES = {'recommendations.json': 'data/recommendations.json', 'journal_catalog.json': 'data/journal_catalog.json',
+         'llm_pricing.json': 'data/llm_pricing.json', 'feed.xml': 'public/feed.xml'}
 
 
 def git(*args, **kwargs):
