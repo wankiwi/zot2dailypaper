@@ -4,9 +4,12 @@ import json
 import os
 import re
 from time import monotonic
-from urllib.parse import urlsplit, urlunsplit
+import unicodedata
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 import requests
+from urllib3.exceptions import LocationParseError
+from urllib3.util import parse_url
 
 from .identity import normalize_doi, paper_id
 from .zotero_action import confirmation_origin
@@ -40,6 +43,37 @@ def _bounded_text(value, limit):
     return value.encode('utf-16-le')[:limit * 2].decode('utf-16-le', errors='ignore')
 
 
+def _public_hostname(value):
+    """Validate DNS/IDNA hosts before v8's WHATWG parser sees the payload."""
+    # Browser URL parsing decodes host escapes and maps Unicode compatibility
+    # characters before recognizing numeric IPv4 forms. urllib.parse does not.
+    decoded = unicodedata.normalize('NFKC', unquote(value, errors='strict'))
+    if re.search(r'[\x00-\x20\x7f/%:@?#\\]', decoded):
+        raise ValueError
+    parsed = parse_url('https://' + decoded)
+    if (parsed.auth is not None or parsed.port is not None or parsed.path
+            or parsed.query is not None or parsed.fragment is not None
+            or not parsed.host):
+        raise ValueError
+    host = parsed.host.rstrip('.')
+    labels = host.split('.')
+    if (len(host) > 253 or len(labels) < 2
+            or any(not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label)
+                   for label in labels)
+            # WHATWG attempts IPv4 parsing whenever the final label is numeric
+            # (decimal/octal/hex), including shortened and Unicode-mapped forms.
+            or re.fullmatch(r'(?:[0-9]+|0x[0-9a-f]*)', labels[-1])
+            or labels[-1] in {'localhost', 'local', 'internal', 'test', 'invalid'}):
+        raise ValueError
+    # ASCII A-labels bypass urllib3's Unicode validation. Validate their decoded
+    # form too, preserving real IDNA names rather than accepting bad punycode.
+    for label in labels:
+        if label.startswith('xn--'):
+            decoded_label = label[4:].encode('ascii').decode('punycode')
+            if parse_url('https://' + decoded_label).host != label:
+                raise ValueError
+
+
 def citation_payload(paper):
     """Match v8's seven public citation fields, excluding scores/TLDR/full text."""
     try:
@@ -48,11 +82,9 @@ def citation_payload(paper):
         if (not isinstance(url, str) or len(url.encode('utf-16-le')) > 4096
                 or re.search(r'[\x00-\x20\x7f\\]', url)
                 or parts.scheme != 'https' or not parts.hostname
-                or parts.username or parts.password or parts.port not in (None, 443)
-                or '.' not in parts.hostname or ':' in parts.hostname
-                or re.fullmatch(r'[\d.]+', parts.hostname)
-                or re.search(r'(?:^|\.)(?:localhost|local|internal|test|invalid)$', parts.hostname)):
+                or parts.username or parts.password or parts.port not in (None, 443)):
             raise ValueError
+        _public_hostname(parts.hostname)
         if not isinstance(paper.authors, list) or len(paper.authors) > 100:
             raise ValueError
         title = _bounded_text(paper.title, 512)
@@ -74,7 +106,7 @@ def citation_payload(paper):
         if len(encoded.encode('utf-8')) > 32768:
             raise ValueError
         return encoded
-    except (AttributeError, TypeError, ValueError, UnicodeError):
+    except (AttributeError, TypeError, ValueError, UnicodeError, LocationParseError):
         raise SyncUnavailable('Invalid recommendation metadata; email remains pending.') from None
 
 

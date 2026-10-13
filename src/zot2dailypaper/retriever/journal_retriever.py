@@ -21,13 +21,14 @@ from ..journals import Journal, discover_nature, selected_journals
 from ..protocol import Paper
 from ..selection import is_cover_title
 from ..metadata import crossref_metadata
+from ..abstracts import clean_abstract
 
 def clean_text(value):
     return ' '.join(unescape(re.sub(r'<[^>]+>', ' ', value or '')).split())
 
 
 def rss_abstract(value, title):
-    text = clean_text(value)
+    text = clean_abstract(value)
     # Nature feeds may supply only a publication notice and repeated title.
     # Strip this precise boilerplate rather than labeling it scientific evidence.
     text, count = re.subn(r'^.{1,100}, Published online: [^;]+; doi:\s*10\.\S+\s*', '', text)
@@ -156,7 +157,7 @@ class JournalRetriever(BaseRetriever):
                         authors, affiliations = crossref_metadata(item)
                         results.append(Paper(source='journals', title=title,
                             authors=authors,
-                            abstract=clean_text(item.get('abstract')), url=f'https://doi.org/{doi}',
+                            abstract=clean_abstract(item.get('abstract')), url=f'https://doi.org/{doi}',
                             pdf_url=links[0] if links else None, doi=doi, journal=journal.title,
                             related_dois=crossref_equivalent_dois(item),
                             issns=list(journal.issns), published=published,

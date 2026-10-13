@@ -39,7 +39,7 @@ class CrossrefAdapter(HTTPAdapter):
 def session(mailto: str | None = None) -> requests.Session:
     client = requests.Session()
     client.headers['User-Agent'] = 'zot2dailypaper/1.0' + (f' (mailto:{mailto})' if mailto else '')
-    retry = Retry(total=3, backoff_factor=1, status_forcelist=(429, 500, 502, 503, 504),
+    retry = BoundedRetry(total=3, backoff_factor=1, status_forcelist=(429, 500, 502, 503, 504),
                   allowed_methods=frozenset({'GET'}), respect_retry_after_header=True)
     client.mount('https://', HTTPAdapter(max_retries=retry))
     crossref_retry = BoundedRetry(total=5, backoff_factor=2, backoff_max=30,

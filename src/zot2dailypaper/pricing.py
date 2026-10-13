@@ -165,11 +165,12 @@ def _now():
     return datetime.now(timezone.utc)
 
 
-def _read_cache():
+def _read_cache(path=None):
+    path = CACHE_PATH if path is None else Path(path)
     try:
-        if CACHE_PATH.is_symlink() or CACHE_PATH.parent.is_symlink() or CACHE_PATH.stat().st_size > 4096:
+        if path.is_symlink() or path.parent.is_symlink() or path.stat().st_size > 4096:
             raise ValueError
-        data = json.loads(CACHE_PATH.read_text(encoding='utf-8'))
+        data = json.loads(path.read_text(encoding='utf-8'))
         if (not isinstance(data, dict) or not isinstance(data.get('source_sha256'), dict)
                 or not isinstance(data.get('estimate_rates'), list)):
             raise ValueError
