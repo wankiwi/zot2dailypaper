@@ -209,7 +209,14 @@ class Executor:
                                                          ranking_strategy=self.config.reranker.get('strategy', 'multi_interest_profile')))
                     logger.info(f'SMTP accepted {len(pending)} recommendations')
                     state.mark(pending, 'email')
-                    state.save()
+                    try:
+                        state.save()
+                    except OSError:
+                        # SMTP already accepted: retry only the idempotent local
+                        # receipt, never the transport. Persistent failure still
+                        # surfaces; a crash/remote commit cannot be made atomic.
+                        logger.warning('SMTP accepted; retrying local delivery history once after an I/O failure')
+                        state.save()
                 except Exception as exc:
                     errors.append(f'email: {exc}')
         if rss_enabled:
