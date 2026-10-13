@@ -37,7 +37,7 @@ class State:
         self.path, self.enabled = Path(path), enabled
         self.records = {}
         if enabled and self.path.exists():
-            data = json.loads(self.path.read_text())
+            data = json.loads(self.path.read_text(encoding='utf-8'))
             if data.get('version') != 1 or not isinstance(data.get('records'), dict):
                 raise ValueError('Unsupported or corrupt recommendation state; preserve file and investigate')
             cutoff = utcnow() - timedelta(days=retention_days)
@@ -59,8 +59,9 @@ class State:
         self.titles = {}
         self.dois = set()
         for record in self.records.values():
-            self.dois.update(paper_dois(load_paper(record['paper'])))
-            self.titles.setdefault(title_key(record['paper']['title']), set()).add(paper_doi(load_paper(record['paper'])))
+            paper = load_paper(record['paper'])
+            self.dois.update(paper_dois(paper))
+            self.titles.setdefault(title_key(paper.title), set()).add(paper_doi(paper))
 
     def has(self, paper):
         doi = paper_doi(paper)
@@ -84,5 +85,5 @@ class State:
         if self.enabled:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             temporary = self.path.with_suffix('.tmp')
-            temporary.write_text(json.dumps({'version': 1, 'records': self.records}, ensure_ascii=False))
+            temporary.write_text(json.dumps({'version': 1, 'records': self.records}, ensure_ascii=False), encoding='utf-8')
             temporary.replace(self.path)

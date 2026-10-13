@@ -82,7 +82,9 @@ class EmbeddingCache:
                     self.memory[key] = vector
                     self.stats["disk_hits"] += 1
                     return vector
-                except (OSError, ValueError, KeyError, EOFError, zipfile.BadZipFile):
+                # ZIP raises RuntimeError (including NotImplementedError) for
+                # encrypted members or unsupported compression methods.
+                except (OSError, ValueError, KeyError, EOFError, RuntimeError, zipfile.BadZipFile):
                     self.stats['corrupt'] += 1
                     logger.warning('Ignoring corrupt local embedding cache entry; recomputing')
         self.stats["misses"] += 1

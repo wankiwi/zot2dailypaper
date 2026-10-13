@@ -1,3 +1,4 @@
+import struct
 import numpy as np
 import pytest
 from zot2dailypaper.reranker.embedding_cache import EmbeddingCache
@@ -32,6 +33,28 @@ def test_corrupt_entry_recomputed(tmp_path):
     assert restored.get('text') is None
     restored.put('text', np.array([2.0]))
     assert np.array_equal(EmbeddingCache({}, tmp_path).get('text'), [2.0])
+
+
+@pytest.mark.parametrize('corruption', ['compression', 'encryption'])
+def test_corrupt_zip_member_encoding_is_recomputed(tmp_path, corruption):
+    cache = EmbeddingCache({}, tmp_path, dimension=2, dtype='float32')
+    vector = np.array([1, 2], dtype=np.float32)
+    cache.put('text', vector)
+    target = cache.directory / (cache.key('text') + '.npz')
+    damaged = bytearray(target.read_bytes())
+    # Toggle one ZIP header bit, preserving the NPY data and checksums.
+    for signature, compression_offset, flags_offset in ((b'PK\x03\x04', 8, 6), (b'PK\x01\x02', 10, 8)):
+        position = 0
+        while (position := damaged.find(signature, position)) >= 0:
+            struct.pack_into('<H', damaged, position + (compression_offset if corruption == 'compression' else flags_offset),
+                             64 if corruption == 'compression' else 1)
+            position += 4
+    target.write_bytes(damaged)
+    fresh = EmbeddingCache({}, tmp_path, dimension=2, dtype='float32')
+    assert fresh.get('text') is None
+    assert fresh.stats['corrupt'] == 1 and fresh.stats['misses'] == 1
+    fresh.put('text', vector)
+    assert np.array_equal(EmbeddingCache({}, tmp_path, dimension=2, dtype='float32').get('text'), vector)
 
 
 @pytest.mark.parametrize('vector', [np.array([0.0]), np.array([np.nan]), np.array([[1.0]]), np.array([1])])

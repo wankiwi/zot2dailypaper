@@ -48,20 +48,28 @@ jobs:
           fi
   llm-validation:
     if: ${{ inputs.mode == 'llm' }}
+    concurrency:
+      group: daily-papers
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
-      contents: write # Only the existing durable daily budget ledger is updated.
+      contents: write # Only the durable daily budget and public pricing receipt are updated.
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v7
       - name: Install locked dependencies
         run: uv sync --frozen
+      - name: Restore last verified LLM pricing
+        run: uv run --frozen python scripts/workflow_state.py restore-pricing
       - name: Validate one Chinese summary without delivery
         env:
           CUSTOM_CONFIG: ${{ vars.CUSTOM_CONFIG }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: uv run --frozen python scripts/validate_llm.py
+      - name: Preserve verified LLM pricing
+        if: ${{ always() && !cancelled() }}
+        run: uv run --frozen python scripts/workflow_state.py save-pricing
 
   zotero-readonly-inspection:
     if: ${{ inputs.mode == 'zotero_readonly' }}

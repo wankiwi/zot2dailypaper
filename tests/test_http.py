@@ -1,6 +1,8 @@
+import io
 from types import SimpleNamespace
 import pytest
 import requests
+from urllib3.response import HTTPResponse
 from zot2dailypaper.http import CrossrefAdapter, BoundedRetry, session
 
 
@@ -31,3 +33,29 @@ def test_retry_after_respected_or_budget_error():
     assert retry.get_retry_after(SimpleNamespace(headers={'Retry-After':'30'})) == 30
     with pytest.raises(requests.exceptions.RetryError, match='budget'):
         retry.get_retry_after(SimpleNamespace(headers={'Retry-After':'600'}))
+
+
+@pytest.mark.parametrize('retry_after', ['30', '7200'])
+def test_generic_adapter_respects_short_retry_after_and_refuses_long_wait(monkeypatch, retry_after):
+    waits, responses = [], []
+
+    def synthetic_response(*args, **kwargs):
+        status = 503 if not responses else 200
+        responses.append(status)
+        return HTTPResponse(body=io.BytesIO(b'{}'), preload_content=False, status=status,
+                            headers={'Retry-After': retry_after} if status == 503 else {})
+
+    monkeypatch.setattr('urllib3.connectionpool.HTTPSConnectionPool._make_request', synthetic_response)
+    monkeypatch.setattr('urllib3.util.retry.time.sleep', waits.append)
+    with session() as client:
+        client.trust_env = False  # No real network or ambient credentials in this test.
+        adapter = client.get_adapter('https://api.openalex.org/works')
+        assert adapter.max_retries.allowed_methods == frozenset({'GET'})
+        if retry_after == '7200':
+            # Requests may wrap the retry refusal as a connection error.
+            with pytest.raises(requests.exceptions.RequestException, match='budget'):
+                client.get('https://api.openalex.org/works', timeout=(10, 30))
+            assert responses == [503] and waits == []
+        else:
+            assert client.get('https://api.openalex.org/works', timeout=(10, 30)).status_code == 200
+            assert responses == [503, 200] and waits == [30]

@@ -111,7 +111,7 @@ def recover_researchsquare(paper, client, blocked):
             else:
                 found_doi, found_title = data.get('doi'), data.get('title') or data.get('display_name') or ''
                 abstract = inverted_abstract(data.get('abstract_inverted_index'))
-            if normalize_doi(found_doi) != doi or title_key(found_title) != title_key(paper.title):
+            if normalize_doi(found_doi) != doi or title_key(clean_abstract(found_title)) != title_key(paper.title):
                 record_attempt(paper, provider, 'doi_version_title_mismatch')
                 logger.warning(f'{provider} Research Square DOI/version/title mismatch; metadata rejected')
                 continue
@@ -197,7 +197,7 @@ def recover_abstracts(papers, config, context=None):
                     if normalize_doi(found_doi) != normalize_doi(paper.doi or paper.url):
                         record_attempt(paper, provider, 'doi_version_mismatch')
                         continue
-                    if found_title and title_key(found_title) != title_key(paper.title):
+                    if found_title and title_key(clean_abstract(found_title)) != title_key(paper.title):
                         record_attempt(paper, provider, 'title_mismatch')
                         continue
                     incomplete = abstract.rstrip().endswith(('…', '...'))

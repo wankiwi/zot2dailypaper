@@ -77,6 +77,7 @@ def test_workflow_does_not_provide_delivery_credentials():
     job = workflow['jobs']['llm-validation']
     assert 'schedule' not in workflow['on']
     assert job['permissions'] == {'contents': 'write'}
-    env = job['steps'][-1]['env']
+    steps = {step.get('name'): step for step in job['steps']}
+    env = steps['Validate one Chinese summary without delivery']['env']
     assert set(env) == {'CUSTOM_CONFIG', 'OPENAI_API_KEY'}
-    assert job['steps'][-1]['run'].endswith('scripts/validate_llm.py')
+    assert steps['Validate one Chinese summary without delivery']['run'].endswith('scripts/validate_llm.py')

@@ -96,6 +96,10 @@ def deduplicate(papers):
 
         if previous is None and title:
             match = titles.get(title)
+            # An OpenReview title never establishes identity with another note
+            # or source: a title merge can disclose names withheld by its ACLs.
+            if match is not None and 'openreview' in (getattr(match, 'source', None), getattr(paper, 'source', None)):
+                match = None
             # Different DOIs can legitimately share a generic article title.
             if match is not None and (not paper_doi(match) or not paper_doi(paper) or paper_doi(match) == paper_doi(paper)):
                 previous = match
@@ -137,6 +141,6 @@ def deduplicate(papers):
             result.append(paper)
             keys[key] = paper
             for alias in paper_dois(paper):keys['doi:'+alias]=paper
-            if title:
+            if title and getattr(paper, 'source', None) != 'openreview':
                 titles[title] = paper
     return result

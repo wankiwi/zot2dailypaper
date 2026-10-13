@@ -8,6 +8,7 @@ from ..http import session
 from ..identity import canonical_doi, deduplicate, normalize_doi
 from ..protocol import Paper
 from ..metadata import crossref_metadata
+from ..abstracts import clean_abstract
 from .openalex_researchsquare import OpenAlexResearchSquare
 
 
@@ -100,6 +101,6 @@ class ResearchSquareRetriever(BaseRetriever):
         authors, affiliations = crossref_metadata(raw_paper)
         return Paper(source=self.name, title=title, authors=[name for name in authors if name],
                      affiliations=affiliations or None,
-                     abstract=clean_text(raw_paper.get('abstract')),
+                     abstract=clean_abstract(raw_paper.get('abstract')),
                      url=f'https://doi.org/{doi}', pdf_url=None, full_text=None,
                      doi=doi, published=posted_date(raw_paper))
