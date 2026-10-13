@@ -7,31 +7,7 @@ import requests
 from hydra import compose, initialize_config_dir
 from loguru import logger
 from zot2dailypaper.retriever.openreview_retriever import OpenReviewRetriever, API, no_exclusions
-
-
-def safe_error_category(response):
-    """Map response text to fixed labels in memory; never return provider text."""
-    try:
-        data = response.json()
-    except (ValueError, TypeError):
-        return 'non_json_error'
-    if not isinstance(data, dict):
-        return 'unclassified_error'
-    errors = data.get('errors', [])
-    entries = [data] + (errors[:5] if isinstance(errors, list) else [])
-    messages = ' '.join(str(e.get('message', ''))[:2000].casefold() for e in entries if isinstance(e, dict))
-    if 'expiresin' in messages:
-        return 'login_expiry_parameter_rejected'
-    if 'mfa' in messages or 'two-factor' in messages:
-        return 'MFA_required'
-    if 'activat' in messages or 'confirm your email' in messages:
-        return 'account_activation_required'
-    if any(term in messages for term in ('invalid credentials', 'invalid username', 'invalid password',
-                                         'incorrect password', 'username or password', 'user not found')):
-        return 'credentials_or_login_identifier_rejected'
-    if 'email' in messages and any(term in messages for term in ('invalid', 'required', 'format')):
-        return 'login_email_format_rejected'
-    return 'unclassified_error'
+from zot2dailypaper.openreview_auth import OpenReviewLoginError, safe_error_category
 
 
 class ProbeClient:
@@ -114,9 +90,10 @@ def main():
         validate(OpenReviewRetriever(config), client)
         return 0
     except Exception as exc:
-        # Only application-owned MFA text is inspected; never output exceptions,
+        # Only the application-owned category is inspected; never output exceptions,
         # response bodies, note contents, identifiers, credentials or tokens.
-        reason = 'MFA_requires_official_unattended_access' if 'login requires MFA' in str(exc) else 'validation_blocked'
+        reason = ('MFA_requires_official_unattended_access'
+                  if isinstance(exc, OpenReviewLoginError) and exc.category == 'MFA_required' else 'validation_blocked')
         print(json.dumps({'status': 'blocked', 'stage': client.stage, 'http_status': client.last_status,
                           'reason': reason, 'provider_error_category': client.error_category,
                           'error_type': type(exc).__name__, 'request_count': client.calls}))
