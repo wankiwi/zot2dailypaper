@@ -280,3 +280,44 @@ def test_run_no_papers_send_empty_true(config, monkeypatch):
     assert len(sent) == 1, "Email should be sent even with no papers when send_empty=true"
     _, _, body = sent[0]
     assert "text/html" in body
+
+
+def test_login_failure_after_other_sources_deliver_keeps_history_and_does_not_resend(config, monkeypatch, tmp_path):
+    """A failed source remains visible without replaying already accepted email."""
+    import smtplib
+    from omegaconf import open_dict
+    from tests.canned_responses import make_sample_paper, make_stub_openai_client, make_stub_smtp, make_stub_zotero_client
+    from zot2dailypaper.openreview_auth import OpenReviewLoginError
+    from zot2dailypaper.protocol import Paper
+    from zot2dailypaper.retriever.base import registered_retrievers
+    from zot2dailypaper.state import State
+    import zot2dailypaper.retriever.arxiv_retriever  # noqa: F401
+    import zot2dailypaper.retriever.openreview_retriever  # noqa: F401
+
+    path = tmp_path / 'history.json'
+    with open_dict(config):
+        config.executor.source = ['arxiv', 'openreview']
+        config.executor.reranker = 'api'
+        config.executor.send_empty = False
+        config.state = {'enabled': True, 'path': str(path)}
+        config.output.email.enabled = True
+        config.output.rss.enabled = False
+        config.llm.enabled = False
+    monkeypatch.setattr('zot2dailypaper.executor.zotero.Zotero', lambda *a, **kw: make_stub_zotero_client())
+    monkeypatch.setattr('zot2dailypaper.executor.OpenAI', lambda **kw: make_stub_openai_client())
+    monkeypatch.setattr('zot2dailypaper.reranker.api.OpenAI', lambda **kw: make_stub_openai_client())
+    monkeypatch.setattr(Paper, 'generate_tldr', lambda *a, **kw: pytest.fail('Disabled LLM generated a paid summary'))
+    paper = make_sample_paper(title='Synthetic accepted recommendation')
+    monkeypatch.setattr(registered_retrievers['arxiv'], 'retrieve_papers', lambda self: [paper])
+
+    def refused(self):
+        raise OpenReviewLoginError('authentication_rejected', 1, 401)
+    monkeypatch.setattr(registered_retrievers['openreview'], 'retrieve_papers', refused)
+    sent = []
+    monkeypatch.setattr(smtplib, 'SMTP', make_stub_smtp(sent))
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match='openreview: OpenReview official login failed'):
+            Executor(config).run()
+        history = State(path)
+        assert history.has(paper) and not history.pending('email')
+        assert len(sent) == 1
