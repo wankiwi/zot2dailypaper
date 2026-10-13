@@ -11,8 +11,8 @@ from ..protocol import Paper
 from ..abstracts import clean_abstract
 from ..preprint_interests import keyword_text, _terms
 from ..metadata import names
+from ..openreview_auth import API, login
 
-API = 'https://api2.openreview.net'
 VENUES = {'ICLR': 'ICLR.cc/{year}/Conference', 'NeurIPS': 'NeurIPS.cc/{year}/Conference',
           'ICML': 'ICML.cc/{year}/Conference', 'CoRL': 'robot-learning.org/CoRL/{year}/Conference', 'TMLR': 'TMLR'}
 SUBJECTS = {
@@ -71,26 +71,15 @@ class OpenReviewRetriever(BaseRetriever):
     def _authenticate(self, client):
         """Official API v2 login; credentials/token stay only in memory."""
         self.authenticated = False
+        headers = getattr(client, 'headers', None)
+        if headers is not None:
+            headers.pop('Authorization', None)
         username, password = os.getenv('OPENREVIEW_USERNAME'), os.getenv('OPENREVIEW_PASSWORD')
         if not username and not password:
             return
         if not username or not password:
             raise RuntimeError('Set both OPENREVIEW_USERNAME and OPENREVIEW_PASSWORD repository secrets')
-        try:
-            response = client.post(API + '/login', json={'id': username, 'password': password, 'expiresIn': 3600},
-                                   timeout=(10, 30), allow_redirects=False)
-            if response.status_code != 200:
-                raise RuntimeError('login rejected')
-            data = response.json()
-        except Exception:
-            raise RuntimeError('OpenReview official login failed; verify credentials/account access (response withheld)') from None
-        if not isinstance(data, dict):
-            raise RuntimeError('OpenReview official login returned an invalid response')
-        if data.get('mfaPending'):
-            raise RuntimeError('OpenReview login requires MFA; unattended login cannot continue; complete an officially supported account authentication setup')
-        token = data.get('token')
-        if not isinstance(token, str) or not token or any(c.isspace() for c in token):
-            raise RuntimeError('OpenReview official login returned no valid session token')
+        token = login(client, username, password)
         client.headers['Authorization'] = 'Bearer ' + token
         self.authenticated = True
 
