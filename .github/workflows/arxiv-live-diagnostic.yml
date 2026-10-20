@@ -1,0 +1,31 @@
+name: Read-only arXiv live diagnostic
+on:
+  push:
+    branches: [diagnostics/arxiv-live-20261020]
+    paths:
+      - .github/workflows/arxiv-live-diagnostic.yml
+      - scripts/diagnose_arxiv_live.py
+permissions:
+  contents: read
+jobs:
+  arxiv-only:
+    if: ${{ github.repository == 'wankiwi/zot2dailypaper' && github.ref == 'refs/heads/diagnostics/arxiv-live-20261020' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      HF_HUB_OFFLINE: '1'
+      TRANSFORMERS_OFFLINE: '1'
+      HF_HUB_DISABLE_TELEMETRY: '1'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+      - name: Install production dependencies from the existing lock
+        run: uv sync --frozen --no-dev
+      - name: Compare real one-day and seven-day arXiv retrieval without application credentials
+        run: uv run --frozen --no-dev python scripts/diagnose_arxiv_live.py
