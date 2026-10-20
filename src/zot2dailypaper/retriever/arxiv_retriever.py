@@ -18,17 +18,99 @@ import requests
 from contextlib import contextmanager
 from time import sleep
 from email.utils import parsedate_to_datetime
+import re
+from urllib.parse import parse_qs, urlsplit
+from xml.etree import ElementTree
+from ..arxiv_health import record_health
 
 T = TypeVar("T")
 
 DOWNLOAD_TIMEOUT = (10, 60)
 PDF_EXTRACT_TIMEOUT = 180
 TAR_EXTRACT_TIMEOUT = 180
+ATOM = '{http://www.w3.org/2005/Atom}'
+OPENSEARCH = '{http://a9.com/-/spec/opensearch/1.1/}'
+ARXIV = '{http://arxiv.org/schemas/atom}'
+
+
+class ArxivFeedError(ValueError):
+    """A successful HTTP response did not contain a complete arXiv page."""
 
 
 
 class ArxivSession(requests.Session):
     """Bounded transient retries; never retry an access refusal or change endpoints."""
+    def __init__(self):
+        super().__init__()
+        self.expected_total = None
+        self._entry_ids = set()
+
+    def _validate_page(self, response, url):
+        params = parse_qs(urlsplit(url).query)
+        start = int(params.get('start', ['0'])[0])
+        maximum = int(params.get('max_results', ['100'])[0])
+        try:
+            feed = ElementTree.fromstring(response.content)
+        except ElementTree.ParseError:
+            raise ArxivFeedError(f'arXiv HTTP 200 is malformed XML at start={start}') from None
+        if feed.tag != ATOM + 'feed':
+            raise ArxivFeedError(f'arXiv HTTP 200 is not an Atom feed at start={start}')
+
+        def number(name):
+            elements = feed.findall(OPENSEARCH + name)
+            text = elements[0].text if len(elements) == 1 else None
+            if text is None or not re.fullmatch(r'[0-9]+', text.strip()):
+                raise ArxivFeedError(f'arXiv invalid {name} at start={start}')
+            return int(text)
+
+        total, actual_start, page_size = (number(name) for name in ('totalResults', 'startIndex', 'itemsPerPage'))
+        entries = feed.findall(ATOM + 'entry')
+        if actual_start != start:
+            raise ArxivFeedError(f'arXiv startIndex mismatch: requested={start}, returned={actual_start}')
+        if (len(entries) > min(maximum, page_size, max(0, total - start))
+                or (start < total and not entries)):
+            raise ArxivFeedError(f'arXiv inconsistent page at start={start}: totalResults={total}, entries={len(entries)}')
+        if start == 0:
+            self.expected_total, self._entry_ids = total, set()
+        elif self.expected_total is not None and total != self.expected_total:
+            raise ArxivFeedError(f'arXiv totalResults changed between pages: {self.expected_total} -> {total}')
+
+        ids = []
+        for index, entry in enumerate(entries):
+            for field in ('id', 'title', 'summary', 'published', 'updated'):
+                element = entry.find(ATOM + field)
+                if element is None or not ''.join(element.itertext()).strip():
+                    raise ArxivFeedError(f'arXiv entry {index} missing {field} at start={start}')
+            for field in ('published', 'updated'):
+                try:
+                    stamp = datetime.fromisoformat(entry.findtext(ATOM + field).strip().replace('Z', '+00:00'))
+                    if stamp.tzinfo is None:
+                        raise ValueError('missing timezone')
+                except ValueError:
+                    raise ArxivFeedError(f'arXiv entry {index} invalid {field} at start={start}') from None
+            identity = entry.findtext(ATOM + 'id').strip()
+            parsed_id = urlsplit(identity)
+            authors = entry.findall(ATOM + 'author')
+            primary = entry.find(ARXIV + 'primary_category')
+            categories = entry.findall(ATOM + 'category')
+            links = entry.findall(ATOM + 'link')
+            if (parsed_id.hostname not in ('arxiv.org', 'www.arxiv.org', 'export.arxiv.org')
+                    or parsed_id.scheme not in ('http', 'https') or not parsed_id.path.startswith('/abs/')):
+                raise ArxivFeedError(f'arXiv entry {index} invalid article ID at start={start}')
+            if not authors or any(not (a.findtext(ATOM + 'name') or '').strip() for a in authors):
+                raise ArxivFeedError(f'arXiv entry {index} missing author names at start={start}')
+            if primary is None or not primary.get('term') or not categories or any(not c.get('term') for c in categories):
+                raise ArxivFeedError(f'arXiv entry {index} missing categories at start={start}')
+            if not links or any(urlsplit(link.get('href', '')).scheme not in ('http', 'https')
+                                or not urlsplit(link.get('href', '')).netloc for link in links):
+                raise ArxivFeedError(f'arXiv entry {index} missing links at start={start}')
+            ids.append(identity)
+        if len(set(ids)) != len(ids) or self._entry_ids.intersection(ids):
+            raise ArxivFeedError(f'arXiv repeated entries at start={start}; refusing partial retrieval')
+        self._entry_ids.update(ids)
+        logger.info(f'arXiv API page: HTTP=200, start={start}, requested={maximum}, '
+                    f'totalResults={total}, entries={len(entries)}')
+
     def get(self, url, **kwargs):
         kwargs.setdefault('timeout', (5, 20))
         kwargs['allow_redirects'] = False
@@ -36,11 +118,21 @@ class ArxivSession(requests.Session):
             response = None
             try:
                 response = super().get(url, **kwargs)
+            except requests.exceptions.ProxyError:
+                # A proxy refusal must not be treated as a transient arXiv outage.
+                raise
             except (requests.ConnectionError, requests.Timeout):
                 if attempt == 3:
                     raise
             else:
+                logger.info(f'arXiv API HTTP status={response.status_code}, start={parse_qs(urlsplit(url).query).get("start", ["0"])[0]}')
                 if response.status_code not in (500, 502, 503, 504) or attempt == 3:
+                    if response.status_code == 200:
+                        try:
+                            self._validate_page(response, url)
+                        except ArxivFeedError:
+                            response.close()
+                            raise
                     return response
             delay = 15 * 2 ** attempt
             if response is not None:
@@ -166,7 +258,36 @@ class ArxivRetriever(BaseRetriever):
     def __init__(self, config):
         super().__init__(config)
         self._raw = {}
+        self._converted_count = self._api_count = self._category_count = 0
         self.categories = categories_for(config, self.name) if self.interests.get('enabled', True) else []
+
+    def retrieve_papers(self) -> list[Paper]:
+        if not self.interests.get('enabled', True):
+            return []
+        self._raw.clear()
+        self._converted_count = self._api_count = self._category_count = 0
+        papers = super().retrieve_papers()
+        counts = {'api_entries': self._api_count, 'primary_category_kept': self._category_count,
+                  'converted': self._converted_count, 'keyword_kept': len(papers)}
+        logger.info(f'arXiv retrieval stages: {counts}; missing_pdf_links={sum(not p.pdf_url for p in papers)}')
+        if self._converted_count != self._category_count:
+            self._raw.clear()
+            raise ArxivFeedError('arXiv conversion skipped entries; refusing incomplete candidate set')
+        scope = {'categories': sorted(self.categories), 'keywords': sorted(self.interests.get('keywords', [])),
+                 'window_days': self.retriever_config.get('window_days'),
+                 'include_cross_list': self.retriever_config.get('include_cross_list', False)}
+        record_health(self.config, scope, counts, datetime.now(timezone.utc))
+        return papers
+
+    @staticmethod
+    def _api_results(client, search):
+        results = list(client.results(search))
+        transport = getattr(client, '_session', None)
+        if isinstance(transport, ArxivSession) and transport.expected_total is not None:
+            expected = min(transport.expected_total, search.max_results or transport.expected_total)
+            if len(results) != expected:
+                raise ArxivFeedError(f'arXiv SDK result count mismatch: expected={expected}, parsed={len(results)}')
+        return results
 
     def _retrieve_raw_papers(self) -> list[ArxivResult]:
         if not self.interests.get('enabled', True):
@@ -181,6 +302,9 @@ class ArxivRetriever(BaseRetriever):
                 raise ValueError('arxiv window_days must be between 1 and 90')
             until = datetime.now(timezone.utc)
             since = until - timedelta(days=days)
+            logger.info(f'arXiv query: mode=submittedDate, since={since.isoformat()}, until={until.isoformat()}, '
+                        f'window_days={days}, categories={categories}, '
+                        f'include_cross_list={self.retriever_config.get("include_cross_list", False)}, keyword_terms={len(keywords)}')
             query = f'submittedDate:[{since:%Y%m%d%H%M} TO {until:%Y%m%d%H%M}]'
             if '*' not in categories:
                 query += ' AND (' + ' OR '.join(f'cat:{category}' for category in categories) + ')'
@@ -191,11 +315,14 @@ class ArxivRetriever(BaseRetriever):
                                   sort_by=arxiv.SortCriterion.SubmittedDate,
                                   sort_order=arxiv.SortOrder.Descending)
             with api_client() as client:
-                results = list(client.results(search))
+                results = self._api_results(client, search)
+            self._api_count = len(results)
             if '*' not in categories and not self.retriever_config.get('include_cross_list', False):
                 results = [paper for paper in results if paper.primary_category in categories]
+            self._category_count = len(results)
             return results
         query = '+'.join(categories)
+        logger.info(f'arXiv query: mode=RSS, categories={categories}')
         include_cross_list = self.config.source.arxiv.get("include_cross_list", False)
         # Get the latest paper from arxiv rss feed
         feed = feedparser.parse(f"https://rss.arxiv.org/atom/{query}")
@@ -216,11 +343,11 @@ class ArxivRetriever(BaseRetriever):
         with api_client() as client:
             for i in range(0, len(all_paper_ids), 20):
                 search = arxiv.Search(id_list=all_paper_ids[i:i + 20])
-                batch = list(client.results(search))
+                batch = self._api_results(client, search)
                 bar.update(len(batch))
                 raw_papers.extend(batch)
         bar.close()
-
+        self._api_count = self._category_count = len(raw_papers)
         return raw_papers
 
     def convert_to_paper(self, raw_paper: ArxivResult) -> Paper:
@@ -230,7 +357,7 @@ class ArxivRetriever(BaseRetriever):
         pdf_url = raw_paper.pdf_url
         self._raw[raw_paper.entry_id] = raw_paper
         full_text = None
-        return Paper(
+        paper = Paper(
             source=self.name,
             title=title,
             authors=authors,
@@ -241,6 +368,8 @@ class ArxivRetriever(BaseRetriever):
             doi=normalize_doi(getattr(raw_paper, "doi", None)),
             published=getattr(raw_paper, "published", None),
         )
+        self._converted_count += 1
+        return paper
 
     def enrich(self, paper: Paper) -> Paper:
         raw = self._raw.get(paper.url)

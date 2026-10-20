@@ -12,7 +12,10 @@ def replies(monkeypatch,values):
         calls.append((url,kwargs));value=values[len(calls)-1]
         if isinstance(value,Exception):raise value
         response=requests.Response();response.status_code=value[0] if isinstance(value,tuple) else value
-        response._content=b'';response._content_consumed=True
+        response._content=(b'<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">'
+                           b'<opensearch:totalResults>0</opensearch:totalResults><opensearch:startIndex>0</opensearch:startIndex>'
+                           b'<opensearch:itemsPerPage>100</opensearch:itemsPerPage></feed>')
+        response._content_consumed=True
         if isinstance(value,tuple):response.headers['Retry-After']=value[1]
         return response
     monkeypatch.setattr(requests.Session,'get',get)
@@ -49,6 +52,14 @@ def test_transport_errors_are_bounded(monkeypatch,error):
     assert len(calls)==4 and waits==[15,30,60]
 
 
+def test_proxy_refusal_is_not_retried_or_misreported_as_arxiv_outage(monkeypatch):
+    calls, waits = replies(monkeypatch, [requests.exceptions.ProxyError('synthetic CONNECT 403')])
+    with module.ArxivSession() as client:
+        with pytest.raises(requests.exceptions.ProxyError):
+            client.get('https://export.arxiv.org/api/query')
+    assert len(calls) == 1 and waits == []
+
+
 @pytest.mark.parametrize('header',['120','invalid','nan'])
 def test_retry_after_never_bypassed(monkeypatch,header):
     calls,waits=replies(monkeypatch,[(503,header)])
@@ -75,7 +86,8 @@ def test_sdk_has_no_nested_retry_and_smaller_pages():
 
 def atom_page(index):
     return f'''<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/" xmlns:arxiv="http://arxiv.org/schemas/atom">
-    <opensearch:totalResults>2</opensearch:totalResults><entry>
+    <opensearch:totalResults>2</opensearch:totalResults><opensearch:startIndex>{index-1}</opensearch:startIndex>
+    <opensearch:itemsPerPage>100</opensearch:itemsPerPage><entry>
     <id>https://arxiv.org/abs/2610.0000{index}v1</id><title>Paper {index}</title>
     <updated>2026-10-03T00:00:00Z</updated><published>2026-10-03T00:00:00Z</published>
     <summary>Complete original abstract.</summary><author><name>Author</name></author>
