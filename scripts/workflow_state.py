@@ -9,7 +9,8 @@ from tempfile import TemporaryDirectory
 
 BRANCH = 'paper-state'
 FILES = {'recommendations.json': 'data/recommendations.json', 'journal_catalog.json': 'data/journal_catalog.json',
-         'llm_pricing.json': 'data/llm_pricing.json', 'feed.xml': 'public/feed.xml'}
+         'llm_pricing.json': 'data/llm_pricing.json', 'feed.xml': 'public/feed.xml',
+         'arxiv_health.json': 'data/arxiv_health.json'}
 PRICING_FILES = {'llm_pricing.json': FILES['llm_pricing.json']}
 
 

@@ -13,6 +13,44 @@ from zot2dailypaper.recommendation_sync import WORKER_ORIGIN
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize('event,custom_days,manual_days,expected', [
+    ('schedule', '1', '', 7), ('schedule', '3', '', 7), ('schedule', 'null', '', 7),
+    ('schedule', '7', '', 7), ('schedule', '14', '', 14), ('schedule', '90', '', 90),
+    ('schedule', '14', '1', 7), ('schedule', '1', '14', 14),
+    ('workflow_dispatch', '1', '', 1), ('workflow_dispatch', '14', '1', 1),
+])
+def test_arxiv_scheduled_window_floor_preserves_scope_and_other_runtime_settings(tmp_path, event, custom_days, manual_days, expected):
+    from omegaconf import OmegaConf
+    shutil.copytree(ROOT / 'config', tmp_path / 'config', ignore=shutil.ignore_patterns('runtime.yaml', 'private.yaml'))
+    custom = (f'source:\n  arxiv: {{window_days: {custom_days}, include_cross_list: true}}\n'
+              '  journals: {window_days: 5}\n  biorxiv: {window_days: 1}\n'
+              'llm: {budget: {daily_cny: 0.30}}\n'
+              'email: {smtp_server: smtp.example.org, sender_password: "${oc.env:SENDER_PASSWORD}"}\n'
+              'executor: {quotas: {journals: 25, preprints: 20, random: 5}}\n')
+    prepare(tmp_path, {'GITHUB_EVENT_NAME': event, 'PAPER_CONFIG': 'interests',
+                       'CUSTOM_CONFIG': custom, 'WINDOW_DAYS': manual_days})
+    with initialize_config_dir(config_dir=str(tmp_path / 'config'), version_base=None):
+        effective = compose(config_name='runtime')
+    assert effective.source.arxiv.window_days == expected
+    assert effective.source.arxiv.include_cross_list
+    assert list(effective.preprint_interests.arxiv.categories) == ['physics.chem-ph', 'physics.comp-ph', 'cond-mat.mtrl-sci', 'cond-mat.soft', 'cs.LG', 'cs.AI']
+    assert effective.source.journals.window_days == (int(manual_days) if manual_days else 5)
+    assert effective.source.biorxiv.window_days == (int(manual_days) if manual_days else 1)
+    assert dict(effective.executor.quotas) == {'journals': 25, 'preprints': 20, 'random': 5}
+    assert effective.llm.budget.enabled and effective.llm.budget.daily_cny == .30
+    assert effective.email.smtp_server == 'smtp.example.org'
+    assert OmegaConf.to_container(effective.email, resolve=False)['sender_password'] == '${oc.env:SENDER_PASSWORD}'
+    assert effective.state.path == 'data/recommendations.json'
+    assert effective.output.email.enabled and not effective.output.rss.enabled
+
+
+@pytest.mark.parametrize('days', ['0', '-1', '91', 'true', '"1"'])
+def test_invalid_scheduled_arxiv_window_is_rejected_instead_of_silently_replaced(tmp_path, days):
+    shutil.copytree(ROOT / 'config', tmp_path / 'config', ignore=shutil.ignore_patterns('runtime.yaml', 'private.yaml'))
+    with pytest.raises(ValueError, match='source.arxiv.window_days'):
+        prepare(tmp_path, {'GITHUB_EVENT_NAME': 'schedule', 'CUSTOM_CONFIG': f'source: {{arxiv: {{window_days: {days}}}}}'})
+
+
 @pytest.mark.parametrize('event', ['schedule', 'workflow_dispatch'])
 def test_worker_sync_uses_approved_origin_without_resolving_credentials(tmp_path, event):
     shutil.copytree(ROOT / 'config', tmp_path / 'config')
@@ -127,7 +165,8 @@ def test_invalid_runtime_overrides_are_rejected(tmp_path, environ):
         prepare(tmp_path, environ)
 
 
-def test_state_branch_roundtrip_preserves_working_branch_and_user_index(tmp_path):
+@pytest.mark.parametrize('health_present', [False, True])
+def test_state_branch_roundtrip_preserves_working_branch_and_user_index(tmp_path, health_present):
     remote, checkout = tmp_path / 'remote.git', tmp_path / 'checkout'
     def git(*args, cwd=None):
         return subprocess.run(['git', *args], cwd=cwd, check=True, capture_output=True).stdout.strip()
@@ -145,6 +184,9 @@ def test_state_branch_roundtrip_preserves_working_branch_and_user_index(tmp_path
     index = git('write-tree', cwd=checkout)
     (checkout / 'data').mkdir()
     (checkout / 'data/recommendations.json').write_text('{"version":1,"records":{}}')
+    health = checkout / 'data/arxiv_health.json'
+    if health_present:
+        health.write_text('{"version":1,"zero_days":2}')
     receipt = '{"version":1,"currency":"CNY","verified_at":"2026-10-11T00:00:00+00:00"}'
     (checkout / 'data/llm_pricing.json').write_text(receipt)
     script = ROOT / 'scripts/workflow_state.py'
@@ -154,9 +196,14 @@ def test_state_branch_roundtrip_preserves_working_branch_and_user_index(tmp_path
     subprocess.run([sys.executable, str(script), 'save'], cwd=checkout, check=True)
     assert git('ls-remote', 'origin', 'refs/heads/paper-state', cwd=checkout) == first
     (checkout / 'data/recommendations.json').unlink()
+    if health_present:
+        health.unlink()
     (checkout / 'data/llm_pricing.json').unlink()
     subprocess.run([sys.executable, str(script), 'restore'], cwd=checkout, check=True)
     assert '"version":1' in (checkout / 'data/recommendations.json').read_text()
+    assert health.exists() is health_present
+    if health_present:
+        assert health.read_text().strip() == '{"version":1,"zero_days":2}'
     assert (checkout / 'data/llm_pricing.json').read_text().strip() == receipt
     assert git('branch', '--show-current', cwd=checkout) == b'main'
     assert git('write-tree', cwd=checkout) == index

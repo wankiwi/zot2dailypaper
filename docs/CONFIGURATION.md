@@ -107,8 +107,8 @@ preprint_interests:
 | `preprint_interests.<platform>.keywords` | 可省略；非空短语列表，如 `[molecular dynamics, materials]` |
 | `preprint_interests.<arxiv/biorxiv/medrxiv>.categories` | 各平台原生分类。arXiv如 `[cs.LG, physics.chem-ph]`；bioRxiv如 `[biophysics]`；`['*']` 全分类 |
 | `source.<arxiv/biorxiv/medrxiv>.category` | base=null；legacy分类配置，被对应 interests.categories 覆盖 |
-| `source.arxiv.include_cross_list` | false；RSS模式是否包括交叉分类 |
-| `source.arxiv.window_days` | base=null 使用最新RSS announcement；all=7，以日期窗口检索 API；当前私有配置覆盖为1 |
+| `source.arxiv.include_cross_list` | false；RSS及API日期窗口模式是否保留交叉分类记录；false仅保留订阅分类为主分类的论文 |
+| `source.arxiv.window_days` | base=null 使用最新RSS announcement；all=7，以 submittedDate 日期窗口检索 API。定时任务在合并 CUSTOM_CONFIG 后至少保留7天，旧1天覆盖提升至7天，更长值保留；手动/本地运行仍尊重显式窗口。其他来源窗口不受此策略影响 |
 | `source.<biorxiv/medrxiv>.window_days` | base=null 使用原始模式；all=1，按日期窗口分页 |
 | `source.<biorxiv/medrxiv>.max_pages` | 100；分页安全上限，达到未完成时报告错误 |
 | `source.<platform>.conversion_delay` | 可选0秒；BaseRetriever 转换间隔（OpenReview自行转换，不使用此项） |
@@ -375,7 +375,13 @@ ChemRxiv 计入现有**预印本 15** 配额；期刊 25、剩余合格未见候
 
 ## arXiv 临时故障与启动时间
 
-定时启动时间为 UTC **19:17**（北京时间次日 **03:17**），GitHub 调度可能延迟，不能保证准点发信。arXiv API 每页 100 条，正常翻页至少间隔 3 秒；连接/读取超时分别为 5/20 秒。对连接超时、连接失败及 HTTP 500/502/503/504，单页最多额外重试 3 次，等待 15/30/60 秒；关闭 SDK 的第二层重试。服务端 Retry-After 需要更长等待时遵守其要求，但超过 60 秒或格式无效就停止本次来源检索，不提前重试。401/403/429 和重定向不重试，不更换域名绕过。
+定时启动时间为 UTC **19:17**（北京时间次日 **03:17**），GitHub 调度可能延迟，不能保证准点发信。arXiv API 每页 100 条，正常翻页至少间隔 3 秒；连接/读取超时分别为 5/20 秒。对连接超时、连接失败及 HTTP 500/502/503/504，单页最多额外重试 3 次，等待 15/30/60 秒；关闭 SDK 的第二层重试。服务端 Retry-After 需要更长等待时遵守其要求，但超过 60 秒或格式无效就停止本次来源检索，不提前重试。401/403/429、重定向和代理拒绝不重试，不更换域名绕过。
+
+定时任务的 arXiv 窗口至少为7天：论文按提交日期筛选，但公开和索引可能晚于提交，滚动24小时还可能因调度延迟出现漏扫间隙。该策略仅覆盖定时任务中 arXiv 的过短/null窗口，保留分类、关键词、交叉分类策略、更长窗口、其他来源、配额和投递历史。无需读取或修改 secrets；可另行清理 Actions variable `CUSTOM_CONFIG` 中旧的 `source.arxiv.window_days: 1`，但不是代码修复生效的前置条件。
+
+HTTP 200 仍须通过完整性检查：有效 Atom/XML，非负的 totalResults/startIndex/itemsPerPage，与请求一致的起始位置和数量边界，以及条目的标题、摘要、作者、日期、分类、ID和链接。非空短页允许继续翻页；totalResults=0且无条目是合法成功。总数为正却空页、总数小于条目数、跨页总数变化、重复条目或SDK跳过记录均作为来源失败，丢弃该来源部分结果。诊断日志分别记录HTTP状态、查询窗口、页数量、API条目数、主分类保留数、转换数及关键词保留数；缺PDF链接单独计数，不假定摘要等于正文。
+
+定时、非debug且启用state的成功检索会保存独立的 `data/arxiv_health.json`，通过原 `paper-state` 分支恢复和保存。文件仅含计数、UTC日期和范围摘要哈希，不含论文正文、关键词明文或凭据。相同范围连续三个不同UTC日零候选时警告；同日多次运行只计一天，同日曾有候选不被后续空结果覆盖，非空结果、日期中断或范围变化重置连续计数。失败/不完整检索和手动检查不推进计数；历史损坏/不可写时保留原文件并提示计数未知，不阻断其他来源投递。首次上线从新的观测开始，不根据邮件历史伪造过去的零结果计数。
 
 持续故障或中途翻页失败仍作为来源失败报告，不交付不完整的 arXiv 候选集。其他来源可以正常投递并保存历史，因此 Actions 显示失败不等于邮件没发出；先检查 SMTP 接受日志及已保存投递状态，不要为了验证而重复运行发信。
 

@@ -90,6 +90,27 @@ def test_partial_source_failure_is_not_reported_as_success(pipeline, monkeypatch
         executor.run()
 
 
+def test_invalid_arxiv_later_page_preserves_other_source_delivery_and_dedup(pipeline, monkeypatch):
+    from tests.test_arxiv_integrity import entry, page, transport
+    pipeline.source.arxiv.window_days = 7
+    pipeline.source.arxiv.category = ['cs.AI']
+    pipeline.output.email.enabled = True
+    pipeline.executor.send_empty = False
+    calls = transport(monkeypatch, [page(entry(1), total=2), b'<html>bad page</html>'] * 2)
+    sent = []
+    monkeypatch.setattr('zot2dailypaper.executor.send_email', lambda *args: sent.append(args))
+    other = make_sample_paper(source='journals', title='Independent journal paper', doi='10.5555/independent-journal')
+    for _ in range(2):
+        executor = Executor(pipeline)
+        executor.retrievers['journals'] = SimpleNamespace(retrieve_papers=lambda: [other])
+        with pytest.raises(RuntimeError, match='arxiv: arXiv HTTP 200 is not an Atom feed'):
+            executor.run()
+    saved = State(pipeline.state.path)
+    assert len(calls) == 4 and len(sent) == 1
+    assert len(saved.records) == 1 and next(iter(saved.records.values()))['paper']['source'] == 'journals'
+    assert not saved.pending('email') and not saved.pending('rss')
+
+
 def test_abstract_recovery_budget_targets_selected_papers(pipeline, monkeypatch):
     with open_dict(pipeline):
         pipeline.executor.max_paper_num = 1

@@ -5,6 +5,7 @@ import re
 
 from omegaconf import OmegaConf
 from hydra import compose, initialize_config_dir
+from loguru import logger
 from zot2dailypaper.preprint_interests import enabled_sources
 from zot2dailypaper.recommendation_sync import WORKER_ORIGIN
 
@@ -80,6 +81,16 @@ def prepare(root: Path, environ=os.environ):
     OmegaConf.save(config, root / 'config' / 'runtime.yaml')
     with initialize_config_dir(config_dir=str((root / 'config').resolve()), version_base=None):
         effective = compose(config_name='runtime')
+    if scheduled:
+        # CUSTOM_CONFIG historically set this to one rolling day, excluding
+        # submissions first announced after moderation/weekend delays.
+        arxiv_days = effective.source.arxiv.window_days
+        if arxiv_days is not None and (type(arxiv_days) is not int or not 1 <= arxiv_days <= 90):
+            raise ValueError('source.arxiv.window_days must be an integer between 1 and 90')
+        if arxiv_days is None or arxiv_days < 7:
+            logger.warning(f'Scheduled arXiv window widened from {arxiv_days} to 7 days for announcement delays')
+            config = OmegaConf.merge(config, {'source': {'arxiv': {'window_days': 7}}})
+            effective.source.arxiv.window_days = 7
     if sources == 'all':
         # Legacy presets leave unused platforms unconfigured. Supply defaults
         # only for those platforms; retain explicit categories/windows.

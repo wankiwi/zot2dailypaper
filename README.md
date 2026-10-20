@@ -40,7 +40,7 @@ llm:
 
 当前配额为 25/20/5，总量 50；预算为每日 ¥0.30，均以现有 `CUSTOM_CONFIG` 为准。配额非空时以其合计为总量，不足不跨组补齐。定时策略使用已保存的 interests 过滤、来源和关键词，保持中文摘要、预算守卫和仅邮件投递，RSS/Pages 输出关闭。
 
-每日运行时间为 **19:17 UTC（次日 03:17 Asia/Singapore）**，GitHub 调度可能延迟。`Send emails daily` 手动运行可设置 `sources`、`preprint_profile`、`llm_mode`、`window_days` 和 `recipient`；默认保留配置。启动完整应用会执行投递，例如以下命令会发送邮件：
+每日运行时间为 **19:17 UTC（次日 03:17 Asia/Singapore）**，GitHub 调度可能延迟。定时任务的 arXiv 检索窗口至少为 7 天，以覆盖公开延迟；旧 `CUSTOM_CONFIG` 的 1 天覆盖会被提升至 7 天，更长窗口及其他来源设置保留。`Send emails daily` 手动运行可设置 `sources`、`preprint_profile`、`llm_mode`、`window_days` 和 `recipient`；手动运行仍尊重显式窗口。启动完整应用会执行投递，例如以下命令会发送邮件：
 
 ```bash
 uv run --frozen zot2dailypaper --config-name=interests llm.enabled=false
@@ -50,7 +50,7 @@ uv run --frozen zot2dailypaper --config-name=interests llm.enabled=false
 
 ## 状态与改名兼容性
 
-- `paper-state` 分支保存投递历史、待投递记录、期刊目录及 `llm_budget.json` 预算账本。沿用原分支、文件和 schema，不清空、不重新初始化。
+- `paper-state` 分支保存投递历史、待投递记录、期刊目录及 `llm_budget.json` 预算账本。沿用原分支、文件和 schema，不清空、不重新初始化。独立的 `arxiv_health.json` 只保存每日抓取/过滤计数及零结果天数，连续三个 UTC 日零候选时告警，不将合法空结果当作来源失败。
 - `embedding-private-v1-` / `embedding-validation-v1-` 缓存 key、模型命名空间和 AES-GCM v1 认证字符串保留原身份；认证字符串中的 `wankiwi/zotero-arxiv-daily` 是兼容标识。可信运行检查使用新仓库名，仍仅允许 main 的定时/手动运行。
 - Zotero 保存服务的 Site、登录身份和已加密凭据沿用既有部署。仓库改名不启用保存入口；其摘要来源 URL 的后续更新及过渡说明见 [改名审计](docs/RENAME.md)。
 
