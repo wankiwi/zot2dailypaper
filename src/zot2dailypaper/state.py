@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 
-from .identity import paper_doi, paper_dois, paper_id, title_key
+from .identity import arxiv_https_url, paper_doi, paper_dois, paper_id, title_key
 from .protocol import Paper
 from .scores import upgrade_scores
 
@@ -24,6 +24,8 @@ def paper_dict(paper):
 
 def load_paper(data):
     data = upgrade_scores(data)
+    data['url'] = arxiv_https_url(data.get('url'))
+    data['pdf_url'] = arxiv_https_url(data.get('pdf_url'))
     data.setdefault('tldr_status', 'legacy' if data.get('tldr') else 'not_generated')
     if data.get('published'):
         data['published'] = datetime.fromisoformat(data['published'])

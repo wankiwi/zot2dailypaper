@@ -1,0 +1,34 @@
+name: Replay authorized saved email batch
+on:
+  push:
+    branches: [delivery/replay-39507147167]
+concurrency:
+  group: daily-papers
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  replay:
+    if: ${{ github.repository == 'wankiwi/zot2dailypaper' && github.ref == 'refs/heads/delivery/replay-39507147167' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # CAS the SMTP intent and receipt in existing paper-state only.
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+      - name: Install locked dependencies
+        run: uv sync --frozen
+      - name: Replay only the 50 saved recommendations without retrieval or model credentials
+        env:
+          CUSTOM_CONFIG: ${{ vars.CUSTOM_CONFIG }}
+          ZOTERO_WORKER_SYNC: ${{ vars.ZOTERO_WORKER_SYNC || 'disabled' }}
+          SENDER: ${{ secrets.SENDER }}
+          RECEIVER: ${{ secrets.RECEIVER }}
+          SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
+          SMTP_SERVER: ${{ vars.SMTP_SERVER || 'smtp.qq.com' }}
+          SMTP_PORT: ${{ vars.SMTP_PORT || '465' }}
+          ZOTERO_WORKER_D1_TOKEN: ${{ secrets.ZOTERO_WORKER_D1_TOKEN }}
+        run: uv run --frozen python -m scripts.replay_delivery

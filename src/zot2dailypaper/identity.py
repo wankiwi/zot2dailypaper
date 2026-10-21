@@ -4,6 +4,30 @@ import re
 from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 
+def arxiv_https_url(value):
+    """Upgrade only literal official HTTP arXiv article URLs, without changing identity."""
+    if not isinstance(value, str) or re.search(r'[\x00-\x20\x7f\\]', value):
+        return value
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        return value
+    if (parts.scheme != 'http' or parts.netloc.lower() not in ('arxiv.org', 'www.arxiv.org', 'export.arxiv.org')
+            or parts.query or parts.fragment):
+        return value
+    path = re.fullmatch(r'/(abs|pdf|html)/(.+)', parts.path)
+    if not path:
+        return value
+    identifier = path[2]
+    if path[1] == 'pdf':
+        identifier = identifier.removesuffix('.pdf')
+    modern = r'\d{2}(?:0[1-9]|1[0-2])\.\d{4,5}'
+    legacy = r'[a-z][a-z-]*(?:\.[A-Z]{2})?/\d{2}(?:0[1-9]|1[0-2])\d{3}'
+    if not re.fullmatch(rf'(?:{modern}|{legacy})(?:v[1-9]\d*)?', identifier, flags=re.ASCII):
+        return value
+    return urlunsplit(('https', parts.netloc, parts.path, '', ''))
+
+
 def normalize_doi(value: str | None) -> str | None:
     if not value:
         return None
