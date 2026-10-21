@@ -11,7 +11,7 @@ import requests
 from urllib3.exceptions import LocationParseError
 from urllib3.util import parse_url
 
-from .identity import normalize_doi, paper_id
+from .identity import arxiv_https_url, normalize_doi, paper_id
 from .zotero_action import confirmation_origin
 
 
@@ -77,7 +77,7 @@ def _public_hostname(value):
 def citation_payload(paper):
     """Match v8's seven public citation fields, excluding scores/TLDR/full text."""
     try:
-        url = paper.url
+        url = arxiv_https_url(paper.url)
         parts = urlsplit(url)
         if (not isinstance(url, str) or len(url.encode('utf-16-le')) > 4096
                 or re.search(r'[\x00-\x20\x7f\\]', url)

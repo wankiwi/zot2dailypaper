@@ -3,7 +3,7 @@ import arxiv
 from datetime import datetime, timedelta, timezone
 from arxiv import Result as ArxivResult
 from ..protocol import Paper
-from ..identity import normalize_doi
+from ..identity import arxiv_https_url, normalize_doi
 from ..preprint_interests import categories_for, keyword_text
 from ..utils import extract_markdown_from_pdf, extract_tex_code_from_tar
 from tempfile import TemporaryDirectory
@@ -354,15 +354,16 @@ class ArxivRetriever(BaseRetriever):
         title = raw_paper.title
         authors = [a.name for a in raw_paper.authors]
         abstract = raw_paper.summary
-        pdf_url = raw_paper.pdf_url
-        self._raw[raw_paper.entry_id] = raw_paper
+        url = arxiv_https_url(raw_paper.entry_id)
+        pdf_url = arxiv_https_url(raw_paper.pdf_url)
+        self._raw[url] = raw_paper
         full_text = None
         paper = Paper(
             source=self.name,
             title=title,
             authors=authors,
             abstract=abstract,
-            url=raw_paper.entry_id,
+            url=url,
             pdf_url=pdf_url,
             full_text=full_text,
             doi=normalize_doi(getattr(raw_paper, "doi", None)),
@@ -372,7 +373,7 @@ class ArxivRetriever(BaseRetriever):
         return paper
 
     def enrich(self, paper: Paper) -> Paper:
-        raw = self._raw.get(paper.url)
+        raw = self._raw.get(arxiv_https_url(paper.url))
         if raw is not None and not paper.full_text:
             paper.full_text = extract_text_from_html(raw)
             if paper.full_text is None:

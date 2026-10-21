@@ -4,13 +4,17 @@ from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 
-from .identity import paper_doi, paper_dois, paper_id, title_key
+from .identity import arxiv_https_url, paper_doi, paper_dois, paper_id, title_key
 from .protocol import Paper
 from .scores import upgrade_scores
 
 
 def utcnow():
     return datetime.now(timezone.utc)
+
+
+class DeliveryUncertain(RuntimeError):
+    """An earlier SMTP attempt must be inspected before another email is prepared."""
 
 
 def paper_dict(paper):
@@ -24,6 +28,8 @@ def paper_dict(paper):
 
 def load_paper(data):
     data = upgrade_scores(data)
+    data['url'] = arxiv_https_url(data.get('url'))
+    data['pdf_url'] = arxiv_https_url(data.get('pdf_url'))
     data.setdefault('tldr_status', 'legacy' if data.get('tldr') else 'not_generated')
     if data.get('published'):
         data['published'] = datetime.fromisoformat(data['published'])
@@ -53,6 +59,8 @@ class State:
                     channels = self.records[key].setdefault('channels', {})
                     for channel, delivered in record.get('channels', {}).items():
                         channels[channel] = channels.get(channel, False) or delivered
+                    if record.get('email_attempt'):
+                        self.records[key]['email_attempt'] = record['email_attempt']
                 else:
                     self.records[key] = record
 
@@ -68,7 +76,14 @@ class State:
         matches = self.titles.get(title_key(paper.title), set())
         return bool(paper_dois(paper) & self.dois) or paper_id(paper) in self.records or bool(matches and (not doi or None in matches or doi in matches))
 
+    def assert_email_delivery_safe(self):
+        if any(record.get('email_attempt') and not record.get('channels', {}).get('email')
+               for record in self.records.values()):
+            raise DeliveryUncertain('Unresolved SMTP attempt in delivery history; inspect its run before sending or generating new summaries')
+
     def pending(self, channel):
+        if channel == 'email':
+            self.assert_email_delivery_safe()
         return [load_paper(v['paper']) for v in self.records.values() if not v.get('channels', {}).get(channel)]
 
     def add(self, papers):
@@ -79,7 +94,10 @@ class State:
 
     def mark(self, papers, channel):
         for paper in papers:
-            self.records[paper_id(paper)]['channels'][channel] = True
+            record = self.records[paper_id(paper)]
+            record['channels'][channel] = True
+            if channel == 'email':
+                record.pop('email_attempt', None)
 
     def save(self):
         if self.enabled:
