@@ -13,6 +13,10 @@ def utcnow():
     return datetime.now(timezone.utc)
 
 
+class DeliveryUncertain(RuntimeError):
+    """An earlier SMTP attempt must be inspected before another email is prepared."""
+
+
 def paper_dict(paper):
     data = asdict(paper)
     data.pop('full_text')  # Keep state compact; never persist downloaded full texts.
@@ -55,6 +59,8 @@ class State:
                     channels = self.records[key].setdefault('channels', {})
                     for channel, delivered in record.get('channels', {}).items():
                         channels[channel] = channels.get(channel, False) or delivered
+                    if record.get('email_attempt'):
+                        self.records[key]['email_attempt'] = record['email_attempt']
                 else:
                     self.records[key] = record
 
@@ -70,7 +76,14 @@ class State:
         matches = self.titles.get(title_key(paper.title), set())
         return bool(paper_dois(paper) & self.dois) or paper_id(paper) in self.records or bool(matches and (not doi or None in matches or doi in matches))
 
+    def assert_email_delivery_safe(self):
+        if any(record.get('email_attempt') and not record.get('channels', {}).get('email')
+               for record in self.records.values()):
+            raise DeliveryUncertain('Unresolved SMTP attempt in delivery history; inspect its run before sending or generating new summaries')
+
     def pending(self, channel):
+        if channel == 'email':
+            self.assert_email_delivery_safe()
         return [load_paper(v['paper']) for v in self.records.values() if not v.get('channels', {}).get(channel)]
 
     def add(self, papers):
@@ -81,7 +94,10 @@ class State:
 
     def mark(self, papers, channel):
         for paper in papers:
-            self.records[paper_id(paper)]['channels'][channel] = True
+            record = self.records[paper_id(paper)]
+            record['channels'][channel] = True
+            if channel == 'email':
+                record.pop('email_attempt', None)
 
     def save(self):
         if self.enabled:

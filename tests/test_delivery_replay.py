@@ -16,7 +16,7 @@ from tests.test_recommendation_sync import D1, FAKE_TOKEN, SQLITE_CLIENTS
 from zot2dailypaper import delivery_replay as module
 from zot2dailypaper.identity import paper_id
 from zot2dailypaper.recommendation_sync import RecommendationSync, SyncUnavailable
-from zot2dailypaper.state import State
+from zot2dailypaper.state import DeliveryUncertain, State
 
 
 class Store:
@@ -104,7 +104,10 @@ def test_smtp_uncertainty_preserves_intent_and_blocks_another_attempt(batch, mon
     monkeypatch.setattr(module, 'send_email', uncertain)
     with pytest.raises(module.ReplayBlocked, match='outcome requires inspection'):
         run(batch)
-    assert len(State(batch.state.path).pending('email')) == 50
+    state = State(batch.state.path)
+    assert sum(not r['channels'].get('email') for r in state.records.values()) == 50
+    with pytest.raises(DeliveryUncertain, match='Unresolved SMTP attempt'):
+        state.pending('email')
     with pytest.raises(module.ReplayBlocked, match='previous SMTP attempt'):
         run(batch, run='another:1')
     assert len(attempts) == 1 and batch.events == ['d1']
@@ -255,3 +258,24 @@ def test_replay_entrypoint_cannot_run_from_main_or_unrelated_branch(monkeypatch)
     monkeypatch.setenv('GITHUB_EVENT_NAME', 'push')
     with pytest.raises(module.ReplayBlocked, match='authorized saved-batch'):
         runner.main()
+
+
+def test_daily_executor_stops_before_retrieval_models_d1_or_smtp_on_uncertain_replay(batch, monkeypatch):
+    from zot2dailypaper.executor import Executor
+    state = State(batch.state.path)
+    next(iter(state.records.values()))['email_attempt'] = {'status': 'smtp_started', 'run': 'uncertain:1'}
+    state.save()
+    batch.config.output = {'email': {'enabled': True}, 'rss': {'enabled': False}}
+    batch.config.state = {'enabled': True, 'path': str(state.path)}
+    batch.config.executor = {'max_paper_num': 50}
+    value = Executor.__new__(Executor)
+    value.config, value.retrievers = batch.config, {}
+    value.openai_client = value.llm_http_client = value.effective_interest_weights = None
+    def forbidden(*args):
+        pytest.fail('Uncertain delivery reached retrieval, model or SMTP stage')
+    value._recommend = forbidden
+    monkeypatch.setattr('zot2dailypaper.executor.sync_client', lambda _: None)
+    monkeypatch.setattr('zot2dailypaper.executor.send_email', forbidden)
+    with pytest.raises(DeliveryUncertain, match='Unresolved SMTP attempt'):
+        value.run()
+    assert batch.events == [] and batch.sends == []

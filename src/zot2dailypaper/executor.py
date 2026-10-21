@@ -173,6 +173,8 @@ class Executor:
         state = State(state_cfg.get('path', 'data/recommendations.json'),
                       enabled=state_cfg.get('enabled', False) or rss_enabled,
                       retention_days=int(state_cfg.get('retention_days', 90)))
+        if email_enabled:
+            state.assert_email_delivery_safe()
         quotas = quotas_for(self.config.executor)
         maximum = sum(quotas.values()) if quotas is not None else int(self.config.executor.max_paper_num)
         workers = int(self.config.executor.get('enrichment_workers', 1))

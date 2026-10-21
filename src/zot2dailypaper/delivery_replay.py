@@ -35,18 +35,22 @@ def batch_from_snapshot(snapshot, count, digest):
     return targets
 
 
-def current_batch(state, targets, *, pending=True):
-    papers, delivered = [], 0
+def current_batch(state, targets, *, pending=True, allow_attempt=None):
+    papers, delivered, attempts = [], 0, []
     for key, saved in targets.items():
         record = state.records.get(key)
         if record is None or record['added'] != saved['added'] or record['paper'] != saved['paper']:
             raise ReplayBlocked('Saved batch changed or disappeared; no additional email sent')
         delivered += bool(record.get('channels', {}).get('email'))
+        if record.get('email_attempt') and not record.get('channels', {}).get('email'):
+            attempts.append(record['email_attempt'])
         papers.append(load_paper(record['paper']))
     if pending and delivered:
         if delivered == len(targets):
             return []
         raise ReplayBlocked('Only part of the target batch is pending; inspect delivery history before retrying')
+    if pending and attempts and (not allow_attempt or any(a.get('run') != allow_attempt for a in attempts)):
+        raise ReplayBlocked('A previous SMTP attempt exists for this batch; inspect its outcome, do not resend')
     return papers
 
 
@@ -86,13 +90,15 @@ def replay(config, snapshot, snapshot_sha, count, digest, store, run_token):
         view.ledger['replays'][key] = {'status': 'smtp_started', 'run': run_token, 'count': count,
                                       'snapshot': snapshot_sha, 'identity_digest': digest,
                                       'started_at': datetime.now(timezone.utc).isoformat()}
+        for identity in targets:
+            view.state.records[identity]['email_attempt'] = {'status': 'smtp_started', 'run': run_token}
         if store.commit(view, 'Record saved-batch SMTP intent before replay'):
             break
     else:
         raise ReplayBlocked('Delivery state kept changing before SMTP; no email sent')
     # Recheck the actual durable marker and pending state immediately before sending.
     view = store.load()
-    if not current_batch(view.state, targets):
+    if not current_batch(view.state, targets, allow_attempt=run_token):
         return {'status': 'already_delivered', 'count': count}
     marker = view.ledger['replays'].get(key, {})
     if marker.get('status') != 'smtp_started' or marker.get('run') != run_token:
