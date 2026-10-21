@@ -73,7 +73,8 @@ def replay(config, snapshot, snapshot_sha, count, digest, store, run_token):
         citation_payload(paper)
     html = render_email(papers, affiliation_max_chars=config.email.get('affiliation_max_chars', 180),
                         zotero_action_origin=config.email.get('zotero_action_origin'),
-                        ranking_strategy=config.get('reranker', {}).get('strategy'))
+                        ranking_strategy=config.get('reranker', {}).get('strategy'),
+                        pricing_notice='')  # Saved summaries incur no new model calls or pricing lookup.
     metadata_sync = sync_client(config.email)
     if metadata_sync is not None:
         metadata_sync.sync(papers, view.state)
