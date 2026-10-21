@@ -260,6 +260,44 @@ def test_replay_entrypoint_cannot_run_from_main_or_unrelated_branch(monkeypatch)
         runner.main()
 
 
+def test_replay_entrypoint_renders_without_pricing_network_or_cache(batch, monkeypatch):
+    import httpx
+    import requests
+    from zot2dailypaper import construct_email
+    from zot2dailypaper.protocol import Paper
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('Saved-batch entrypoint attempted a pricing, retrieval or model operation')
+
+    # Keep runner.main's process-wide safety guards scoped to this test.
+    for owner, name in ((httpx.Client, 'send'), (httpx.AsyncClient, 'send'),
+                        (Paper, 'generate_tldr'), (Paper, 'generate_affiliations'),
+                        (requests.Session, 'send')):
+        monkeypatch.setattr(owner, name, getattr(owner, name))
+    monkeypatch.setattr(construct_email, 'pricing_warning', forbidden)
+    monkeypatch.setattr(requests.Session, 'send', forbidden)
+    monkeypatch.setattr(runner, 'DIGEST', batch.digest)
+    monkeypatch.setattr(runner, 'configuration', lambda root, environ: batch.config)
+    monkeypatch.setattr(runner, 'GitReplayStore', lambda directory: batch.store)
+
+    def saved_snapshot(*args):
+        if args == ('fetch', '--no-tags', '--depth=1', 'origin', runner.SNAPSHOT):
+            return b''
+        assert args == ('show', f'{runner.SNAPSHOT}:recommendations.json')
+        return json.dumps(batch.snapshot).encode()
+
+    monkeypatch.setattr(runner, 'git', saved_snapshot)
+    for name in ('OPENAI_API_KEY', 'ZOTERO_KEY', 'ZOTERO_ID'):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in {'GITHUB_REPOSITORY': 'wankiwi/zot2dailypaper', 'GITHUB_REF': runner.REPLAY_REF,
+                        'GITHUB_EVENT_NAME': 'push', 'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '1'}.items():
+        monkeypatch.setenv(name, value)
+    runner.main()
+    assert batch.events == ['d1', 'smtp'] and len(batch.sends) == 1
+    assert not State(batch.state.path).pending('email')
+    assert next(iter(batch.store.ledger['replays'].values()))['run'] == '123:1'
+
+
 def test_daily_executor_stops_before_retrieval_models_d1_or_smtp_on_uncertain_replay(batch, monkeypatch):
     from zot2dailypaper.executor import Executor
     state = State(batch.state.path)

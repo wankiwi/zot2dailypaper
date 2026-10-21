@@ -232,7 +232,7 @@ def metadata_label(paper, field):
 
 
 def render_email(papers: list[Paper], *, affiliation_max_chars=180, zotero_action_origin=None,
-                 interest_weights=None, ranking_strategy=None) -> str:
+                 interest_weights=None, ranking_strategy=None, pricing_notice=None) -> str:
     shorten_affiliations([], affiliation_max_chars)  # Validate even an empty digest.
     zotero_action_origin = confirmation_origin(zotero_action_origin)
     labels = {'journals': '期刊 / Journals', 'preprints': '预印本 / Preprints（含会议论文）', 'random': '随机推荐 / Random'}
@@ -286,7 +286,7 @@ def render_email(papers: list[Paper], *, affiliation_max_chars=180, zotero_actio
                    '<strong>AI 摘要状态 / AI summary status</strong><br>'
                    + escape(f'{generated}/{len(papers)} generated. Original abstracts retained when available. {detail}')
                    + '</td></tr>') + content
-    warning = pricing_warning()
+    warning = pricing_warning() if pricing_notice is None else pricing_notice
     if warning:
         content = ('<tr><td style="font-family:Aptos,Calibri,Arial,Helvetica,sans-serif;padding:16px;'
                    'background:#fff3cd;color:#713f12;border:2px solid #b7791f;font-size:14px;line-height:1.7;">'
