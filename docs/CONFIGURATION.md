@@ -155,6 +155,13 @@ Research Square 请求使用固定 OpenAlex HTTPS 地址、Bearer 请求头并�
 先核对 `SMTP accepted`、历史保存步骤和 `paper-state` 的 `channels.email`/pending；
 已发送的记录无需补发，也不要为它们重新生成摘要。
 
+独立只读验证入口为 `scripts/diagnose_openalex.py`，仅诊断分支
+`diagnostics/openalex-auth-20261023` 的 push 会触发专用 Actions 流程。
+它仅接入 OpenAlex key，仓库权限为只读，不进入每日管线；最多24次GET、不自动重试，
+完成当前一天窗口的正常来源检索，并对2026-10-21至22日原失败窗口做两页、每页一条的续页样本验证。
+输出页数、条目数、作用域/版本去重和字段转换统计；历史样本不表示完整历史覆盖，摘要统计不表示全文解析。
+它不读取或修改生产推荐、预算或投递记录，不调用模型、SMTP、Zotero或D1。
+
 ### OpenReview 的真实范围与限制
 
 仅主会议，不含workshops。API v2 `/groups` 核验组，再读取其 `submission_id` 或 `submission_name`，按 submission invitation 拉取公开 notes，避免仅按 accepted venueid 丢失审稿中论文。年度组覆盖当前/上一年，ICLR另含下一年；TMLR无年度。修改时间扫描窗口内实际更新记录，未发表记录日期优先 `odate`（首次公开），缺失时退至 cdate/tcdate（创建时间）；经venue ID和pdate核验的已发表记录使用pdate，以包含新发表的旧投稿。无持久增量水位，重叠窗口+delivery history去重，因此失败不会推进水位；窗口外首次公开但元数据日期错误的记录可能无法恢复，不能声称完整历史覆盖。

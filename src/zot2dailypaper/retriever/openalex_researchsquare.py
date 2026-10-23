@@ -124,13 +124,13 @@ class OpenAlexResearchSquare:
         logger.info(f'OpenAlex verified subfields: {resolved}')
         return {identity for identities in resolved.values() for identity in identities}
 
-    def retrieve(self):
+    def retrieve(self, *, session_factory=None):
         days, max_pages = int(self.config.get('window_days', 1)), int(self.config.get('max_pages', 100))
         if not 1 <= days <= 90 or max_pages < 1:
             raise ValueError('Research Square requires window_days 1–90 and positive max_pages')
         until = datetime.now(timezone.utc).date()
         since = until - timedelta(days=days)
-        with session() as client:
+        with (session_factory or session)() as client:
             verified_sources = self.verify_sources(client)
             subfields = self.resolve_subfields(client)
             filters = ','.join(['locations.source.id:' + '|'.join(verified_sources), 'type:preprint',
