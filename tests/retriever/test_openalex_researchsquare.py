@@ -40,7 +40,7 @@ def setup(config, monkeypatch, pages, source_name='Research Square', catalog=Non
                 data = {'meta': {'count': len(catalog)}, 'results': catalog[start:start + 100]}
             else:
                 data = pages.pop(0)
-            return SimpleNamespace(status_code=status, raise_for_status=lambda: None, json=lambda: data)
+            return SimpleNamespace(status_code=status, raise_for_status=lambda: None, json=lambda: data, close=lambda: None)
     monkeypatch.setattr('zot2dailypaper.retriever.openalex_researchsquare.session', Client)
     return ResearchSquareRetriever(config), calls
 

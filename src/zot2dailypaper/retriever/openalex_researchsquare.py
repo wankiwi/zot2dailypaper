@@ -1,9 +1,11 @@
-"""Research Square metadata via OpenAlex's public, keyless API."""
+"""Research Square metadata via OpenAlex, with optional authenticated paging."""
 from datetime import datetime, timedelta, timezone
+import os
 import re
 
 from loguru import logger
 from omegaconf import ListConfig
+import requests
 
 from ..http import session
 from ..identity import canonical_doi, normalize_doi
@@ -25,13 +27,32 @@ def string_list(value, field):
 
 
 def get_json(client, path, params=None):
-    response = client.get(API + path, params=params, timeout=(10, 30))
-    if response.status_code == 404:
-        raise MissingOpenAlexRecord('OpenAlex record returned HTTP 404')
-    if response.status_code in (401, 403, 429):
-        raise RuntimeError(f'OpenAlex access/budget error HTTP {response.status_code}; check access or free quota; no paid fallback')
-    response.raise_for_status()
-    return response.json()
+    # Keep credentials out of Hydra/CUSTOM_CONFIG, query strings and exception URLs.
+    key = os.environ.get('OPENALEX_API_KEY', '')
+    if key and not re.fullmatch(r'[A-Za-z0-9._~+/-]{1,512}={0,2}', key):
+        raise ValueError('OPENALEX_API_KEY must be a header-safe API key; value withheld')
+    headers = {'Authorization': 'Bearer ' + key} if key else {}
+    stage = path.split('/')[1]
+    if path == '/works':
+        stage += ' cursor ' + ('initial' if (params or {}).get('cursor') == '*' else 'continuation')
+    try:
+        response = client.get(API + path, params=params, headers=headers,
+                              timeout=(10, 30), allow_redirects=False)
+    except requests.RequestException:
+        raise RuntimeError(f'OpenAlex transport failed at {stage}; details withheld; no credential fallback') from None
+    try:
+        if response.status_code == 404:
+            raise MissingOpenAlexRecord('OpenAlex record returned HTTP 404')
+        if response.status_code in (401, 403, 429):
+            configured = 'configured' if key else 'not configured'
+            raise RuntimeError(f'OpenAlex access/budget error HTTP {response.status_code} at {stage}; '
+                               f'OPENALEX_API_KEY is {configured}; check key activation/access or free quota. '
+                               'Cursor paging beyond the first page requires an activated API key; no paid fallback')
+        if response.status_code != 200:
+            raise RuntimeError(f'OpenAlex HTTP {response.status_code} at {stage}; redirects are disabled')
+        return response.json()
+    finally:
+        response.close()
 
 
 def abstract_text(index):
@@ -116,12 +137,14 @@ class OpenAlexResearchSquare:
                 'topics.subfield.id:' + '|'.join(sorted(subfields)),
                 f'from_publication_date:{since}', f'to_publication_date:{until}'])
             cursor, seen, records, received = '*', set(), [], 0
-            for _ in range(max_pages):
+            for page_number in range(1, max_pages + 1):
                 data = get_json(client, '/works', {'filter': filters, 'per_page': 100, 'cursor': cursor})
                 items, meta = data['results'], data['meta']
                 received += len(items)
                 records.extend(item for item in items if isinstance(item, dict))
                 count, next_cursor = int(meta['count']), meta.get('next_cursor')
+                logger.info(f'OpenAlex works page {page_number}: HTTP=200, entries={len(items)}, '
+                            f'totalResults={count}, authentication={"configured" if os.environ.get("OPENALEX_API_KEY") else "absent"}')
                 if received >= count:
                     break
                 if not items or not next_cursor or next_cursor == cursor or next_cursor in seen:
