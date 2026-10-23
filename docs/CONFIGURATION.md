@@ -113,7 +113,8 @@ preprint_interests:
 | `source.<biorxiv/medrxiv>.max_pages` | 100；分页安全上限，达到未完成时报告错误 |
 | `source.<platform>.conversion_delay` | 可选0秒；BaseRetriever 转换间隔（OpenReview自行转换，不使用此项） |
 | `source.researchsquare.window_days`, `max_pages`, `mailto` | 1、100、null；日期窗口、页上限、Crossref polite pool 联系邮箱 |
-| `preprint_interests.researchsquare.backend` | `openalex` 使用公开OpenAlex；未设时旧Crossref backend |
+| `preprint_interests.researchsquare.backend` | `openalex` 使用OpenAlex API；未设时旧Crossref backend |
+| 环境变量 `OPENALEX_API_KEY` | 可选已激活的 OpenAlex key，只通过请求头发送，不放入 CUSTOM_CONFIG。cursor 第二页起官方要求 key；未配置仍可匿名查询首屏，超过首屏的结果不能冒称完整检索。Actions 使用同名 repository secret，须由用户安全配置；不自动申请 key、启用付费额度或改换后端 |
 | `preprint_interests.researchsquare.source_ids` | `[S4306525896]`；实时核对确为Research Square，不能猜ID |
 | `preprint_interests.researchsquare.type` | 仅 `[preprint]` |
 | `preprint_interests.researchsquare.subfield` | 非空OpenAlex正式子领域名称列表；实时按精确名称解析，重名取所有精确匹配 |
@@ -137,6 +138,29 @@ preprint_interests:
 | `abstracts.aps_metadata_max_papers` | 10；范围0–50，0关闭。对仍缺摘要的APS DOI，最多处理10篇已选论文，先查Semantic Scholar精确DOI元数据，再用arXiv标题定位最多3个候选并强制验证DOI、标题与明确版本号。每站每篇最多一次GET，2MB上限，不跟随重定向；401/403/429停止该站点。arXiv单连接、请求间隔至少3秒。索引摘要明确标注版本未核实，arXiv标注具体版本及“DOI-linked manuscript”，不覆盖出版社日期或冒称出版社原摘要 |
 | `email.zotero_action_origin` | `null` (disabled). Future authenticated confirmation service HTTPS origin, e.g. `https://papers.example.org`; no path/query/credentials. Adds a login-and-confirm navigation link only. Requires a separately approved/deployed service; never enables writes on email GET. See [design and setup requirements](RESEARCHSQUARE_ZOTERO.md). |
 | `email.affiliation_max_chars` | 180；HTML/纯文本中作者单位总显示字符上限，包含末尾省略号 `…`，范围20–1000。例：`email: {affiliation_max_chars: 120}`；不修改内部完整单位信息 |
+
+### OpenAlex 认证与故障核对
+
+[官方认证说明（2026-10-15 更新）](https://help.openalex.org/api/authentication/)允许基本匿名查询，
+但 cursor 翻过第一页需要已完成邮箱验证的 API key。请在 OpenAlex 免费账号的 Settings → API key 获取，
+并通过 GitHub Settings → Secrets and variables → Actions 安全保存为 `OPENALEX_API_KEY`；不要贴进聊天、
+公开配置、URL 或日志。不自动注册账号、发送激活邮件、购买额度或切换到其他检索路径。
+
+Research Square 请求使用固定 OpenAlex HTTPS 地址、Bearer 请求头并禁止重定向；401/403 不重试，
+不会丢弃 key 后改为匿名请求。错误记录端点阶段、cursor 首屏/续页和凭据是否配置，不输出凭据或响应正文。
+每个成功 works 页记录页码、条目数和总数；只有完整分页后才应用原有来源、日期、子领域、版本及去重规则。
+401 本身不能区分缺 key、key 无效/未激活等原因，须结合阶段和官方说明核对。
+
+如果某个来源失败，其他来源的推荐可能已经发出，因此不能只根据 Actions 标红重跑。
+先核对 `SMTP accepted`、历史保存步骤和 `paper-state` 的 `channels.email`/pending；
+已发送的记录无需补发，也不要为它们重新生成摘要。
+
+独立只读验证入口为 `scripts/diagnose_openalex.py`，仅诊断分支
+`diagnostics/openalex-auth-20261023` 的 push 会触发专用 Actions 流程。
+它仅接入 OpenAlex key，仓库权限为只读，不进入每日管线；最多24次GET、不自动重试，
+完成当前一天窗口的正常来源检索，并对2026-10-21至22日原失败窗口做两页、每页一条的续页样本验证。
+输出页数、条目数、作用域/版本去重和字段转换统计；历史样本不表示完整历史覆盖，摘要统计不表示全文解析。
+它不读取或修改生产推荐、预算或投递记录，不调用模型、SMTP、Zotero或D1。
 
 ### OpenReview 的真实范围与限制
 

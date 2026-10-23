@@ -238,6 +238,42 @@ def test_partial_researchsquare_results_save_delivery_without_repeat(pipeline, m
     assert not state.pending('email') and not state.pending('rss')
 
 
+def test_openalex_401_keeps_source_failure_visible_after_50_saved_summaries_are_delivered(pipeline, monkeypatch):
+    from zot2dailypaper.retriever.openalex_researchsquare import get_json
+    pipeline.output.email.enabled = True
+    pipeline.output.rss.enabled = False
+    pipeline.state.enabled = True
+    pipeline.executor.send_empty = False
+    pipeline.executor.max_paper_num = 50
+    pipeline.executor.quotas = None
+    papers = [make_sample_paper(title=f'Saved summary {index}', doi=f'10.5555/openalex-{index}',
+                               url=f'https://example.org/openalex-{index}', source='journals',
+                               tldr=f'这是第{index}篇已保存摘要。', tldr_status='generated') for index in range(50)]
+    sent, synced, closed = [], [], []
+    response = SimpleNamespace(status_code=401, close=lambda: closed.append(1))
+    client = SimpleNamespace(get=lambda *args, **kwargs: response)
+
+    def refused():
+        return get_json(client, '/works', {'cursor': 'opaque-next-cursor'})
+
+    monkeypatch.setattr('zot2dailypaper.executor.send_email', lambda config, html: sent.append(html))
+    monkeypatch.setattr('zot2dailypaper.executor.sync_client', lambda _: SimpleNamespace(
+        sync=lambda batch, state: synced.append(len(batch))))
+    monkeypatch.setattr('zot2dailypaper.protocol.Paper.generate_tldr', lambda *args, **kwargs:
+                        pytest.fail('Saved-summary regression must not call a model'))
+    for _ in range(2):
+        executor = Executor(pipeline)
+        executor.retrievers = {'journals': SimpleNamespace(retrieve_papers=lambda: papers),
+                               'researchsquare': SimpleNamespace(retrieve_papers=refused)}
+        with pytest.raises(RuntimeError, match='researchsquare: OpenAlex access/budget error HTTP 401'):
+            executor.run()
+    state = State(pipeline.state.path)
+    assert len(sent) == 1 and synced == [50] and len(closed) == 2
+    assert not state.pending('email') and len(state.records) == 50
+    assert all(record['paper']['tldr_status'] == 'generated' for record in state.records.values())
+    assert all(paper.tldr in sent[0] for paper in papers)
+
+
 def test_opt_in_recovery_reranks_before_selection_and_reuses_context(pipeline,monkeypatch):
     pipeline.executor.max_paper_num=1
     pipeline.abstracts.pre_rank_max_papers=2

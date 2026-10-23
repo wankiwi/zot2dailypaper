@@ -1,0 +1,33 @@
+name: Read-only authenticated OpenAlex verification
+on:
+  push:
+    branches: [diagnostics/openalex-auth-20261023]
+permissions:
+  contents: read
+concurrency:
+  group: openalex-readonly-diagnostic
+  cancel-in-progress: false
+jobs:
+  verify:
+    if: ${{ github.repository == 'wankiwi/zot2dailypaper' && github.ref == 'refs/heads/diagnostics/openalex-auth-20261023' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+      - name: Install locked dependencies
+        run: uv sync --frozen
+      - name: Verify source retrieval and actual authenticated cursor continuation
+        env:
+          OPENALEX_API_KEY: ${{ secrets.OPENALEX_API_KEY }}
+        run: uv run --frozen python -m scripts.diagnose_openalex
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openalex-source-verification
+          path: artifacts/openalex-source-verification.json
+          if-no-files-found: error
+          retention-days: 7
