@@ -1,0 +1,28 @@
+name: Read-only OpenAlex abstract field inspection
+on:
+  push:
+    branches: [diagnostics/openalex-abstract-fields-20261023]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    if: ${{ github.repository == 'wankiwi/zot2dailypaper' && github.ref == 'refs/heads/diagnostics/openalex-abstract-fields-20261023' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+      - run: uv sync --frozen
+      - name: Inspect aggregate fields with exactly one authenticated metadata GET
+        env:
+          OPENALEX_API_KEY: ${{ secrets.OPENALEX_API_KEY }}
+        run: uv run --frozen python -m scripts.inspect_openalex_abstracts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openalex-abstract-fields
+          path: artifacts/openalex-abstract-fields.json
+          retention-days: 7
