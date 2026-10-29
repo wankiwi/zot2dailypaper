@@ -10,6 +10,7 @@ from .identity import paper_id
 from .recommendation_sync import citation_payload, sync_client
 from .state import load_paper, paper_dict
 from .utils import send_email
+from .api_costs import ApiCosts
 
 
 class ReplayBlocked(RuntimeError):
@@ -71,10 +72,13 @@ def replay(config, snapshot, snapshot_sha, count, digest, store, run_token):
     # Validate every citation and render before D1 writes or the durable SMTP intent.
     for paper in papers:
         citation_payload(paper)
+    costs = ApiCosts()
+    costs.saved_summaries = sum(p.has_ai_summary for p in papers)
     html = render_email(papers, affiliation_max_chars=config.email.get('affiliation_max_chars', 180),
                         zotero_action_origin=config.email.get('zotero_action_origin'),
                         ranking_strategy=config.get('reranker', {}).get('strategy'),
-                        pricing_notice='')  # Saved summaries incur no new model calls or pricing lookup.
+                        pricing_notice='', api_costs=costs, llm_enabled=False,
+                        delivery_only=True)  # No model calls or pricing lookup.
     metadata_sync = sync_client(config.email)
     if metadata_sync is not None:
         metadata_sync.sync(papers, view.state)

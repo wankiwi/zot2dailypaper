@@ -2,6 +2,7 @@
 from .protocol import Paper
 from .zotero_action import confirmation_origin, confirmation_link
 from .budget import pricing_warning
+from .api_costs import ApiCosts
 from .selection import GROUPS, paper_group
 from html import escape
 from html.parser import HTMLParser
@@ -232,7 +233,8 @@ def metadata_label(paper, field):
 
 
 def render_email(papers: list[Paper], *, affiliation_max_chars=180, zotero_action_origin=None,
-                 interest_weights=None, ranking_strategy=None, pricing_notice=None) -> str:
+                 interest_weights=None, ranking_strategy=None, pricing_notice=None,
+                 api_costs=None, llm_enabled=True, delivery_only=False) -> str:
     shorten_affiliations([], affiliation_max_chars)  # Validate even an empty digest.
     zotero_action_origin = confirmation_origin(zotero_action_origin)
     labels = {'journals': '期刊 / Journals', 'preprints': '预印本 / Preprints（含会议论文）', 'random': '随机推荐 / Random'}
@@ -275,6 +277,15 @@ def render_email(papers: list[Paper], *, affiliation_max_chars=180, zotero_actio
         sections.append('<tr><td class="digest-section" width="100%" style="font-family:Aptos,Calibri,Arial,Helvetica,sans-serif;padding:0 0 24px;">' + heading +
                         '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="font-family:Aptos,Calibri,Arial,Helvetica,sans-serif;table-layout:fixed;">' + ''.join(parts) + '</table></td></tr>')
     content = ''.join(sections)
+    if api_costs is None:
+        # Standalone render has no run telemetry; never infer zero from papers.
+        cost_html = ('<tr><td style="padding:16px;font-family:Aptos,Calibri,Arial,Helvetica,sans-serif;">'
+                     'API 费用 / API cost: usage report unavailable; estimated expenditure unknown.</td></tr>')
+    elif not isinstance(api_costs, ApiCosts):
+        raise TypeError('api_costs must be a run usage report')
+    else:
+        cost_html = api_costs.html(llm_enabled=llm_enabled, delivery_only=delivery_only)
+    content = cost_html + content
     degraded = [p for p in papers if p.tldr_error or p.tldr_error_reason not in (None, 'llm_disabled')
                 or (p.tldr_status == 'generated' and not p.has_ai_summary)]
     if degraded:

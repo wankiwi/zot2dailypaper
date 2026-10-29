@@ -19,6 +19,7 @@ from .budget_calendar import (LOCAL_TIMEZONE, LedgerInvalid, window_at, migrated
                               validate_local, overlapping_legacy, next_unblocked_window)
 from loguru import logger
 from .pricing import review
+from .api_costs import ApiCosts, summary_schedule
 
 class BudgetUnavailable(RuntimeError):
     def __init__(self, message, *, reason='budget_guard_unavailable', day=None, retry_at=None, timezone_name='UTC'):
@@ -64,7 +65,7 @@ def pricing_warning():
     return prefix
 
 
-def budget_plan(config):
+def budget_plan(config, *, with_pricing=False):
     budget = config.get('budget', {})
     if budget.get('timezone', LOCAL_TIMEZONE) != LOCAL_TIMEZONE:
         raise BudgetUnavailable('Only the approved Asia/Singapore budget timezone is supported', reason='budget_timezone_invalid')
@@ -102,7 +103,7 @@ def budget_plan(config):
                 Decimal(MAX_OUTPUT_TOKENS) * Decimal(pricing['output_cny_per_million'])) / Decimal(1000000)
     if not per_call.is_finite() or per_call <= 0 or per_call > cap:
         raise BudgetUnavailable('Invalid or insufficient verified budget')
-    return cap, per_call
+    return (cap, per_call, dict(pricing)) if with_pricing else (cap, per_call)
 
 
 def git(*args, **kwargs):
@@ -178,7 +179,7 @@ def reserve_day(cap, day=None):
 
 class BudgetRequests(ModelRequests):
     def __init__(self, cap, per_call, day, *, failure_threshold=None, max_retry_wait=5,
-                 expected_model=None, expected_endpoint=None, window=None):
+                 expected_model=None, expected_endpoint=None, window=None, price_schedule=None):
         try:
             cap, per_call = Decimal(str(cap)), Decimal(str(per_call))
         except InvalidOperation:
@@ -190,7 +191,13 @@ class BudgetRequests(ModelRequests):
         self.expected_model, self.expected_endpoint = expected_model, expected_endpoint
         self.window = window
         self.timezone_name = window.timezone_name if window is not None else 'UTC'
+        self.cap, self.price_schedule = cap, price_schedule
+        self.attach_costs(ApiCosts())
         self._budget_lock = Lock()
+
+    def attach_costs(self, costs):
+        self.api_costs = costs
+        costs.reserved(self.cap, self.day, self.timezone_name)
 
     def check_window(self):
         current = budget_now() if self.window is not None else None
@@ -222,11 +229,14 @@ class BudgetRequests(ModelRequests):
 
 def prepare_budget(config):
     policy = request_policy(config)
-    cap, per_call = budget_plan(config)
+    # Return the exact admission snapshot; a second review could cross midnight
+    # and return different rates from those that established the dispatch bound.
+    cap, per_call, pricing = budget_plan(config, with_pricing=True)
     window = reserve_local_day(cap, config.get('budget', {}).get('timezone', LOCAL_TIMEZONE))
     return BudgetRequests(cap, per_call, window.day, failure_threshold=policy['failure_threshold'],
                           max_retry_wait=policy['max_retry_wait_seconds'],
-                          expected_model=config.generation_kwargs.model, expected_endpoint=str(config.api.base_url), window=window)
+                          expected_model=config.generation_kwargs.model, expected_endpoint=str(config.api.base_url), window=window,
+                          price_schedule=summary_schedule(pricing))
 
 
 def reserve_local_day(cap, timezone_name=LOCAL_TIMEZONE):

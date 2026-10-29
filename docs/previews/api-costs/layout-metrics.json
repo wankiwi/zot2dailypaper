@@ -1,0 +1,23 @@
+[
+  {
+    "case": "partial",
+    "width": 375,
+    "scrollWidth": 375,
+    "height": 1938,
+    "external_requests_blocked": true
+  },
+  {
+    "case": "mixed",
+    "width": 1200,
+    "scrollWidth": 1200,
+    "height": 1791,
+    "external_requests_blocked": true
+  },
+  {
+    "case": "replay",
+    "width": 375,
+    "scrollWidth": 375,
+    "height": 1687,
+    "external_requests_blocked": true
+  }
+]

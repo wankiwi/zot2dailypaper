@@ -1,0 +1,53 @@
+ZOTERO · RESEARCH DIGEST
+
+Daily Papers
+
+1 recommendation · Journal and preprint selections ranked by relevance; random picks sampled from remaining eligible papers
+
+Scored using abstract similarity to your library (100%). Legacy mean ranking averages keywords and weights library references by when they were added. Scores range from 0 to 100. Higher scores mean a closer match, not a probability or accuracy estimate. Scores are shown to one decimal place.
+
+LLM 费用提醒 / Pricing warning
+
+Synthetic preview only: no API calls or email sends. All usage is invented; the USD demo tariff is illustrative and does not configure or migrate any provider.
+
+API 费用 / API cost — 本次运行 / this run
+
+按供应商返回用量和价格表估算；不是供应商账单。 Usage-priced estimates, not provider invoices; no account balance, taxes or currency conversion. Model API usage only; prior runs are excluded.
+
+Known estimated subtotal: CNY 0.00048000; all dispatched attempts priced.
+
+SiliconFlow / deepseek-ai/DeepSeek-V4-Flash / chat: known estimate CNY 0.00048000; 1 attempts, 0 retries, 0 failed, 0 unknown cost.
+
+Tokens: input=100; output=20; cache_read=30; cache_write=0; reasoning=0. Reasoning is included in output, not added again; cache reads/writes are input subsets, not extra input.
+
+Price schedule: siliconflow-peak-v1-ae20d50faf22; CNY/million tokens input=3, output=9, cache_read=full input rate, cache_write=full input rate; verified 2026-10-01, valid through 2026-10-08 (stale). Full input rate means no cache discount applied; estimates may differ from charges.
+
+Budget reservation: CNY 0.30 (Asia/Singapore 2026-10-29, whole-day-no-refund). This is the reserved allowance, not estimated expenditure or a remaining account balance.
+
+期刊 / Journals (0)
+
+No new recommendations in this group.
+
+预印本 / Preprints（含会议论文） (1)
+
+arxiv · Date unavailable · Source: arxiv
+
+1. Synthetic API-cost preview: measured
+
+Example Author
+
+Unknown Affiliation
+
+Relevance: 85/100
+
+Original abstract (AI summary not generated)
+
+Synthetic content for offline rendering only.
+
+Article (https://example.org/synthetic)
+
+随机推荐 / Random (0)
+
+No new recommendations in this group.
+
+zot2dailypaper · Based on Zotero-arXiv-Daily. To stop delivery, disable the scheduled workflow in GitHub Actions.
