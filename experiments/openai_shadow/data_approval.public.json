@@ -1,0 +1,10 @@
+{
+  "public_disclosure_approved": true,
+  "authorized_on": "2026-10-29",
+  "title_only_fallback_approved": true,
+  "methods": [
+    "decisions"
+  ],
+  "scope": "Exactly five public paper titles/public abstracts where available plus generic identity-free research rubric. No preference labels, private notes or Zotero library.",
+  "labels_included": false
+}

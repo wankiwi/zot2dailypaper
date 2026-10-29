@@ -56,6 +56,22 @@ class GenericTests(unittest.TestCase):
             self.assertEqual(result["reserved_usd"],"1.000000000")
         finally:runner.github=original
 
+    def test_title_only_requires_matching_explicit_approval(self):
+        ids=set("abcde")
+        data={"data_approval.public.json":{"public_disclosure_approved":True,"title_only_fallback_approved":True},
+              "papers.public.json":[{"id":i,"title":"synthetic title","abstract":"" if i=="a" else "synthetic abstract"} for i in sorted(ids)],
+              "rubric.public.json":{"version":"synthetic","instructions":"synthetic criteria","levels":[]},
+              "source_review.public.json":{"live_ready":True,"title_only_fallback_approved":True,"title_only_ids":["a"]},
+              "pricing.public.json":{"verified_on":datetime.now(timezone.utc).date().isoformat()}}
+        with tempfile.TemporaryDirectory() as path:
+            root=Path(path)
+            for name,value in data.items():(root/name).write_text(json.dumps(value))
+            runner.load_approved_public_data(root,ids)
+            data["source_review.public.json"]["title_only_ids"]=[]
+            (root/'source_review.public.json').write_text(json.dumps(data['source_review.public.json']))
+            with self.assertRaisesRegex(runner.Stop,"explicit_title_only_scope"):
+                runner.load_approved_public_data(root,ids)
+
     def test_core_usage_cache_and_reasoning_accounting(self):
         with tempfile.TemporaryDirectory() as path:
             core=runner.load_core(Path(path))

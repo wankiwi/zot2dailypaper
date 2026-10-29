@@ -413,22 +413,26 @@ def run_one(method, request, ledger, key, send=transport, output=None):
     return ledger.finish(method, fields)
 
 
-def preflight(papers, env, method="decisions"):
+def preflight(papers, env, method="decisions", source_review=None):
     reasons = []
     try:
         credential(env)
     except Blocked as exc:
         reasons.append(str(exc))
     missing = [p["id"] for p in papers if not p["abstract"].strip()]
-    if missing:
+    review = source_review if source_review is not None else read_json(ROOT / "source_review.json")
+    allowed_title_only = (review.get("title_only_fallback_approved") is True
+                          and set(review.get("title_only_ids", [])) == set(missing))
+    if missing and not allowed_title_only:
         reasons.append("verified_public_abstracts_missing")
-    if read_json(ROOT / "source_review.json")["live_ready"] is not True:
+    if review.get("live_ready") is not True:
         reasons.append("source_review_incomplete")
     if method == "llm" and not read_json(ROOT / "pricing_snapshot.json").get("responses_schema_verified", False):
         reasons.append("optional_responses_schema_not_yet_verified")
     return {"checked_at": utc_now(), "official_credential_present": bool(env.get("OPENAI_API_KEY")),
             "issuer_verified": env.get("OPENAI_API_KEY_ISSUER") == ISSUER,
             "abstracts_present": len(papers) - len(missing), "missing_abstract_ids": missing,
+            "title_only_fallback_approved": bool(missing) and allowed_title_only,
             "blockers": reasons, "live_ready": not reasons,
             "api_requests_sent_by_preflight": 0}
 

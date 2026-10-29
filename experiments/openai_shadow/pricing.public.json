@@ -1,0 +1,25 @@
+{
+  "version": "openai-gpt-6-luna-standard-2026-10-29",
+  "verified_on": "2026-10-29",
+  "currency": "USD",
+  "processing": "standard",
+  "region": "global official api.openai.com; no regional processing",
+  "model": "gpt-6-luna",
+  "input_usd_per_million": "0.10",
+  "cached_input_usd_per_million": "0.01",
+  "cache_write_30m_usd_per_million": "0.125",
+  "cache_write_12h_usd_per_million": "0.25",
+  "decisions_output_usd_per_million": "0",
+  "responses_output_usd_per_million": "0.50",
+  "cache_policy": "explicit mode, no breakpoints, 30m; caching disabled. Reserve the higher 30m write rate anyway.",
+  "reasoning_policy": "Reasoning tokens are included in total output tokens, never added to them twice.",
+  "context_policy": "Conservative input bound <=272000; regional premiums and longer context unsupported.",
+  "sources": [
+    "https://developers.openai.com/api/docs/guides/decisions",
+    "https://developers.openai.com/api/reference/resources/decisions/methods/create",
+    "https://developers.openai.com/api/docs/models/gpt-6-luna",
+    "https://developers.openai.com/api/docs/pricing"
+  ],
+  "responses_schema_verified": false,
+  "responses_schema_status": "Large reference page exceeded browser's 4 MiB limit; optional comparator must be schema-rechecked before enabling live."
+}

@@ -1,0 +1,38 @@
+{
+  "live_ready": true,
+  "original_public_abstracts_verified": 2,
+  "title_only_fallback_approved": true,
+  "title_only_ids": [
+    "P041",
+    "P267",
+    "P508"
+  ],
+  "quality_limit": "Three papers have unavailable original public abstracts and are explicitly title-only. No current-profile Jina comparison or held-out validation.",
+  "sources": [
+    {
+      "id": "P041",
+      "source": "https://onlinelibrary.wiley.com/doi/10.1002/anie.3951000",
+      "status": "title_only_abstract_unavailable"
+    },
+    {
+      "id": "P113",
+      "source": "https://arxiv.org/abs/2610.37581",
+      "status": "primary_abstract_verified"
+    },
+    {
+      "id": "P267",
+      "source": "https://www.nature.com/articles/s44221-026-00734-6",
+      "status": "title_only_abstract_unavailable"
+    },
+    {
+      "id": "P508",
+      "source": "https://www.jbatesgroup.com/publications",
+      "status": "title_only_abstract_unavailable"
+    },
+    {
+      "id": "P932",
+      "source": "https://arxiv.org/abs/2610.35965",
+      "status": "primary_abstract_verified"
+    }
+  ]
+}

@@ -76,8 +76,14 @@ def load_approved_public_data(root, expected_ids):
         raise Stop("unapproved_five_paper_scope")
     if any(set(p) != {"id", "title", "abstract"} for p in papers):
         raise Stop("unapproved_paper_fields_no_labels_or_private_profile")
-    if any(not isinstance(p[k], str) or not p[k].strip() for p in papers for k in ("id", "title", "abstract")):
-        raise Stop("complete_original_public_abstracts_required")
+    if any(not isinstance(p[k], str) for p in papers for k in ("id", "title", "abstract")) or any(not p["title"].strip() for p in papers):
+        raise Stop("invalid_public_title_or_abstract")
+    missing={p["id"] for p in papers if not p["abstract"].strip()}
+    title_only_allowed=(approval.get("title_only_fallback_approved") is True
+                        and review.get("title_only_fallback_approved") is True
+                        and set(review.get("title_only_ids",[]))==missing)
+    if missing and not title_only_allowed:
+        raise Stop("complete_abstracts_or_explicit_title_only_scope_required")
     if set(rubric) != {"version", "instructions", "levels"} or review.get("live_ready") is not True:
         raise Stop("public_rubric_or_source_review_incomplete")
     if price.get("verified_on") != datetime.now(timezone.utc).date().isoformat():
@@ -117,6 +123,8 @@ def main():
             "secret_present":bool(os.environ.get("OPENAI_API_KEY")),"private_labels_received":False}
     try:
         papers,rubric,review,price,methods=load_approved_public_data(PUBLIC_ROOT,core.EXPECTED_IDS)
+        status["scoring_basis"]={p["id"]:"abstract" if p["abstract"].strip() else "title_only" for p in papers}
+        status["evaluation_role"]="rubric-only development sanity test; no current-profile baseline or held-out quality claim"
         if price.get("version") != core.PRICE_VERSION:
             raise Stop("unverified_price_version")
         for name,value in (("papers.json",papers),("rubric.json",rubric),("source_review.json",review),("pricing_snapshot.json",price)):
