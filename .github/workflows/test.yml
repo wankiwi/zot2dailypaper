@@ -3,90 +3,49 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Isolated tests, OpenReview checks, or one guarded paid LLM summary (no email)
+        description: Isolated experiment only on this test branch
         type: choice
-        options: [tests, openreview, openreview_full, llm, zotero_readonly]
+        options: [tests]
         default: tests
       collection_name_sha256:
-        description: SHA256 of the exact target collection name (read-only inspection)
+        description: Unused compatibility input; leave empty
         type: string
         default: ''
 permissions:
   contents: read
+concurrency:
+  group: openai-shadow-20261029
+  cancel-in-progress: false
 jobs:
-  isolated-tests:
-    if: ${{ inputs.mode == 'tests' }}
+  isolated-experiment:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/experiment/openai-shadow-20261029' && github.run_attempt == 1 }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v7
-      - name: Install locked dependencies
-        run: uv sync --frozen
-      - name: Run isolated tests without delivery credentials
-        run: uv run --frozen pytest
-  openreview-validation:
-    if: ${{ inputs.mode == 'openreview' || inputs.mode == 'openreview_full' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    permissions:
+      contents: write # Only test-branch budget reservation; never main or paper-state.
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@v7
-      - name: Install locked dependencies
-        run: uv sync --frozen
-      - name: Validate official login and public submissions only
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Test generic runner with synthetic data only
+        run: python -m unittest discover -s experiments/openai_shadow -p 'test_public.py' -v
+      - name: Check public-data approval and run one durably reserved experiment
         env:
-          OPENREVIEW_USERNAME: ${{ secrets.OPENREVIEW_USERNAME }}
-          OPENREVIEW_PASSWORD: ${{ secrets.OPENREVIEW_PASSWORD }}
-        run: |
-          if [ "${{ inputs.mode }}" = "openreview_full" ]; then
-            uv run --frozen python scripts/diagnose_openreview.py
-          else
-            uv run --frozen python scripts/validate_openreview.py
-          fi
-  llm-validation:
-    if: ${{ inputs.mode == 'llm' }}
-    concurrency:
-      group: daily-papers
-      cancel-in-progress: false
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: write # Only the durable daily budget and public pricing receipt are updated.
-    steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v7
-      - name: Install locked dependencies
-        run: uv sync --frozen
-      - name: Restore last verified LLM pricing
-        run: uv run --frozen python scripts/workflow_state.py restore-pricing
-      - name: Validate one Chinese summary without delivery
-        env:
-          CUSTOM_CONFIG: ${{ vars.CUSTOM_CONFIG }}
+          GH_TOKEN: ${{ github.token }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: uv run --frozen python scripts/validate_llm.py
-      - name: Preserve verified LLM pricing
-        if: ${{ always() && !cancelled() }}
-        run: uv run --frozen python scripts/workflow_state.py save-pricing
-
-  zotero-readonly-inspection:
-    if: ${{ inputs.mode == 'zotero_readonly' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v6
+          OPENAI_API_KEY_ISSUER: https://api.openai.com
+          OPENAI_API_BASE: https://api.openai.com/v1
+        run: |
+          umask 077
+          python experiments/openai_shadow/runner.py
+      - name: Retain sanitized accounting and approved public-input results only
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
         with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@v7
-      - name: Install locked dependencies
-        run: uv sync --frozen
-      - name: Read permission names and target collection existence only
-        env:
-          ZOTERO_KEY: ${{ secrets.ZOTERO_KEY }}
-          ZOTERO_ID: ${{ secrets.ZOTERO_ID }}
-          TARGET_COLLECTION_SHA256: ${{ inputs.collection_name_sha256 }}
-        run: uv run --frozen python scripts/inspect_zotero_access.py
+          name: shadow-result-${{ github.run_id }}
+          path: ${{ runner.temp }}/shadow-output/
+          retention-days: 1
+          if-no-files-found: ignore
