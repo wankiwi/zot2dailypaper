@@ -1,0 +1,36 @@
+{
+  "run_id": "40847588593",
+  "source_commit": "2e757aa4a9a83d5800b4baf49a67636af1271020",
+  "artifact_id": 12885697249,
+  "artifact_sha256": "e09da142a8429ade03438821860fbf90bb15f9a96ebd9fee67adf380e90c5ea2",
+  "artifact_bytes": 4940,
+  "original_artifact_expires_at": "2026-10-30T09:10:52Z",
+  "original_claim": {
+    "schema": 1,
+    "plan": "openai-shadow-20261029-v1",
+    "run_id": "40847588593",
+    "source_sha": "2e757aa4a9a83d5800b4baf49a67636af1271020",
+    "status": "reserved_outcome_unknown",
+    "currency": "USD",
+    "limit_usd": "1.000000000",
+    "reserved_usd": "1.000000000"
+  },
+  "original_claim_blob_sha": "7fe07670fbcb6650a4835add634ec0edd931af73",
+  "source_of_scores_and_usage": "parent verified original artifact ZIP; local byte-transfer failures retained in private audit",
+  "scores_0_to_3": {
+    "P041": 0.56,
+    "P113": 2.66,
+    "P267": 0.24,
+    "P508": 0.44,
+    "P932": 0.18
+  },
+  "usage": {
+    "input_tokens": 1736,
+    "cache_tokens": 0,
+    "output_tokens": 0
+  },
+  "estimated_cost_usd": "0.000173600",
+  "invoice_verified": false,
+  "labels_included": false,
+  "claim_erased": false
+}

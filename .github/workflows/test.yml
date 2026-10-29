@@ -3,9 +3,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Isolated experiment only on this test branch
+        description: tests = sources only (no API secret); llm = one authorized cumulative v2 score
         type: choice
-        options: [tests]
+        options: [tests, llm]
         default: tests
       collection_name_sha256:
         description: Unused compatibility input; leave empty
@@ -17,12 +17,10 @@ concurrency:
   group: openai-shadow-20261029
   cancel-in-progress: false
 jobs:
-  isolated-experiment:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/experiment/openai-shadow-20261029' && github.run_attempt == 1 }}
+  source-preflight:
+    if: ${{ inputs.mode == 'tests' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/experiment/openai-shadow-20261029' && github.run_attempt == 1 }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: write # Only test-branch budget reservation; never main or paper-state.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
         with:
@@ -30,22 +28,49 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
-      - name: Test generic runner with synthetic data only
-        run: python -m unittest discover -s experiments/openai_shadow -p 'test_public.py' -v
-      - name: Check public-data approval and run one durably reserved experiment
+      - name: Offline synthetic guard tests
+        run: python -m unittest discover -s experiments/openai_shadow -p 'test*.py' -v
+      - name: Public source preflight only; no model secret or budget mutation
+        run: |
+          umask 077
+          python experiments/openai_shadow/runner_v2.py --sources-only
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: shadow-v2-source-preflight-${{ github.run_id }}
+          path: ${{ runner.temp }}/shadow-v2-output/
+          retention-days: 90
+          if-no-files-found: ignore
+  authorized-v2:
+    if: ${{ inputs.mode == 'llm' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/experiment/openai-shadow-20261029' && github.run_attempt == 1 }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # Existing experimental ledger only; no production state.
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Offline synthetic guard tests
+        run: python -m unittest discover -s experiments/openai_shadow -p 'test*.py' -v
+      - name: Fetch and validate all five abstracts without model credentials
+        run: |
+          umask 077
+          python experiments/openai_shadow/runner_v2.py --sources-only
+      - name: Score only with full evidence and original cumulative USD 1 budget
         env:
           GH_TOKEN: ${{ github.token }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_API_KEY_ISSUER: https://api.openai.com
           OPENAI_API_BASE: https://api.openai.com/v1
-        run: |
-          umask 077
-          python experiments/openai_shadow/runner.py
-      - name: Retain sanitized accounting and approved public-input results only
+        run: python experiments/openai_shadow/runner_v2.py --score
+      - uses: actions/upload-artifact@v4
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
         with:
-          name: shadow-result-${{ github.run_id }}
-          path: ${{ runner.temp }}/shadow-output/
-          retention-days: 1
+          name: shadow-v2-result-${{ github.run_id }}
+          path: ${{ runner.temp }}/shadow-v2-output/
+          retention-days: 90
           if-no-files-found: ignore

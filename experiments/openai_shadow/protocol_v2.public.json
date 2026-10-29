@@ -1,0 +1,33 @@
+{
+  "experiment_id": "same-five-complete-abstracts-v2",
+  "authorized_on": "2026-10-29",
+  "budget": "original shared USD 1, cumulative with v1; not a new allowance",
+  "historical_cost_usd": "0.000173600",
+  "remaining_before_v2_usd": "0.999826400",
+  "max_additional_model_attempts": 1,
+  "method": "decisions_same_v1_rubric_full_abstracts",
+  "rubric_source_commit": "2e757aa4a9a83d5800b4baf49a67636af1271020",
+  "rubric_changed": false,
+  "required_ids": [
+    "P041",
+    "P113",
+    "P267",
+    "P508",
+    "P932"
+  ],
+  "full_abstracts_required_for_all": true,
+  "title_only": {
+    "evidence_status": "insufficient_evidence",
+    "relevance_score": null,
+    "action": "await_source_completion_no_model_call"
+  },
+  "evidence_gate": "Source identity, original abstract section and bounded length are checked independently of relevance. A negative relevance score is never manufactured for a missing abstract.",
+  "revised_handling_test": "Offline gate ablation: remove an abstract and verify insufficient-evidence/null relevance/no call. The live old-rubric/full-abstract run isolates evidence completion; no prompt tuning to perfect five labels.",
+  "model_output_policy": "Preserve actual raw score distributions, returned model and usage; no hardcoded user labels or score overrides.",
+  "public_artifacts": "Source URL/provenance/abstract hash and size; request hash and rubric version; sanitized model outputs and cumulative cost. No raw newly retrieved abstracts or full raw requests.",
+  "labels": "strictly local; never published or sent to model",
+  "quality_claim": "development sanity checks only; no held-out evidence or true Jina baseline",
+  "execution": "manual Test workflow on existing experimental branch only; no automatic dispatch/retry; production unchanged",
+  "v1_papers_sha256": "793a26bb24688d3dfb219481fb5b55da1c1c21900c806602d6549c31497d2aee",
+  "v1_rubric_sha256": "441e10d3feb38c3ed9e630d109eec532531387c4009dc560bea2c1d59d15bef9"
+}

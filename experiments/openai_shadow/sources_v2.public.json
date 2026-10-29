@@ -1,0 +1,67 @@
+{
+  "P041": {
+    "routes": [
+      {
+        "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=42949622&retmode=xml",
+        "format": "pubmed_xml",
+        "identifier": "10.1002/anie.3951000",
+        "provenance": "primary_pubmed_doi_and_pmid_match",
+        "license": "not_verified_runtime_only"
+      },
+      {
+        "url": "https://www.lifescience.net/publications/2275437/bromide-activated-four-electron-iodine-chemistry-e/",
+        "format": "html",
+        "identifier": "42949622",
+        "end_pattern": "^PMID\\b",
+        "provenance": "secondary_pubmed_mirror_title_and_pmid_match_not_primary",
+        "license": "not_verified_runtime_only"
+      }
+    ]
+  },
+  "P113": {
+    "existing_source": "https://arxiv.org/abs/2610.37581"
+  },
+  "P267": {
+    "routes": [
+      {
+        "url": "https://www.nature.com/articles/s44221-026-00734-6",
+        "format": "html",
+        "identifier": "10.1038/s44221-026-00734-6",
+        "end_pattern": "^(Access options|Similar content)",
+        "provenance": "primary_nature_exact_title_and_doi",
+        "license": "exclusive_rights_runtime_analysis_only"
+      }
+    ]
+  },
+  "P508": {
+    "routes": [
+      {
+        "url": "https://pubs.acs.org/doi/10.1021/jacs.6c09028",
+        "format": "html",
+        "identifier": "10.1021/jacs.6c09028",
+        "end_pattern": "^(Supporting Information|References|Article Views|Access)",
+        "provenance": "primary_acs_exact_title_and_doi",
+        "license": "not_verified_runtime_only"
+      },
+      {
+        "url": "https://chemrxiv.org/doi/full/10.26434/chemrxiv.15002639/v2",
+        "format": "html",
+        "identifier": "10.26434/chemrxiv.15002639/v2",
+        "end_pattern": "^(References|Author Information|Download)",
+        "provenance": "primary_chemrxiv_v2_title_and_doi",
+        "license": "not_verified_runtime_only"
+      },
+      {
+        "url": "https://www.researchgate.net/publication/404596490_Rigor_Reproducibility_in_Electrocatalysis_Integrating_Theory_and_Experiment",
+        "format": "html",
+        "identifier": "10.26434/chemrxiv.15002639/v2",
+        "end_pattern": "^(No file available|Download citation|Request full.text|References)",
+        "provenance": "secondary_researchgate_exact_chemrxiv_v2_title_and_doi_not_primary",
+        "license": "not_verified_runtime_only"
+      }
+    ]
+  },
+  "P932": {
+    "existing_source": "https://arxiv.org/abs/2610.35965"
+  }
+}
