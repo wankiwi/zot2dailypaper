@@ -101,26 +101,27 @@ class V2Tests(unittest.TestCase):
     def test_missing_evidence_is_null_not_low_relevance(self):
         papers=json.loads((r.ROOT/'papers.public.json').read_text())
         config=json.loads((r.ROOT/'sources_v2.public.json').read_text());calls=[]
-        config['P508'].pop('user_provided_abstract',None) # Exercise generic unavailable-source fallback.
+        for key in ('P267','P508'):config[key].pop('user_provided_abstract',None) # Generic unavailable-source fallback.
         def missing(url):calls.append(url);raise OSError('synthetic offline source')
         _,evidence,ready=s.prepare(papers,config,get=missing)
         self.assertFalse(ready);self.assertEqual(len(calls),6)
         for key in ('P041','P267','P508'):
             self.assertEqual(evidence[key]['evidence_status'],'insufficient_evidence')
             self.assertIsNone(evidence[key]['relevance_score'])
-    def test_user_provided_abstract_is_verbatim_labeled_and_uses_no_rigor_get(self):
+    def test_user_provided_abstracts_are_verbatim_labeled_and_skip_blocked_pages(self):
         papers=json.loads((r.ROOT/'papers.public.json').read_text())
         config=json.loads((r.ROOT/'sources_v2.public.json').read_text());calls=[]
         def missing(url):calls.append(url);raise OSError('synthetic offline source')
         completed,evidence,ready=s.prepare(papers,config,get=missing)
-        provided=config['P508']['user_provided_abstract']
-        self.assertEqual(next(p['abstract'] for p in completed if p['id']=='P508'),provided)
-        self.assertEqual(evidence['P508']['source']['kind'],'user_provided_abstract')
-        self.assertTrue(evidence['P508']['source']['not_independently_publisher_fetched'])
-        self.assertEqual(evidence['P508']['evidence_status'],'abstract_available')
-        self.assertFalse(ready);self.assertEqual(len(calls),3)
-        self.assertTrue(all(url not in calls for url in [item['url'] for item in config['P508']['routes']]))
-        self.assertNotIn(provided,json.dumps(evidence))
+        for key in ('P267','P508'):
+            provided=config[key]['user_provided_abstract']
+            self.assertEqual(next(p['abstract'] for p in completed if p['id']==key),provided)
+            self.assertEqual(evidence[key]['source']['kind'],'user_provided_abstract')
+            self.assertTrue(evidence[key]['source']['not_independently_publisher_fetched'])
+            self.assertEqual(evidence[key]['evidence_status'],'abstract_available')
+            self.assertTrue(all(item['url'] not in calls for item in config[key]['routes']))
+            self.assertNotIn(provided,json.dumps(evidence))
+        self.assertFalse(ready);self.assertEqual(len(calls),2)
     def test_invalid_user_provided_abstract_does_not_fallback_to_http(self):
         paper={'id':'P508','title':'Synthetic title','abstract':''};calls=[]
         config={'P508':{'user_provided_abstract':'too short','routes':[{'url':'https://example.org'}]}}
@@ -212,7 +213,9 @@ class V2Tests(unittest.TestCase):
             papers=json.loads((fixtures/'papers.public.json').read_text());lookup={p['id']:p for p in papers}
             marker='SYNTHETIC_FULL_ABSTRACT for complete-source integration testing. '*5
             routes=json.loads((fixtures/'sources_v2.public.json').read_text())
+            source_calls=[]
             def fetch(url):
+                source_calls.append(url)
                 key=next(k for k,v in routes.items() if any(item['url']==url for item in v.get('routes',[])))
                 title=escape(lookup[key]['title']);route=routes[key]['routes'][0]
                 if route['format']=='pubmed_xml':
@@ -236,6 +239,7 @@ class V2Tests(unittest.TestCase):
                 with contextlib.redirect_stdout(io.StringIO()):
                     source=r.source_stage(private,out,get=fetch)
                 self.assertTrue(source['ready'])
+                self.assertEqual(source_calls,[routes['P041']['routes'][0]['url']])
                 with contextlib.redirect_stdout(io.StringIO()):result=r.score_stage(private,out)
                 self.assertEqual(result['status'],'completed')
                 self.assertEqual(len(sent),1)
@@ -246,6 +250,7 @@ class V2Tests(unittest.TestCase):
                     self.assertNotIn('Much of the water that matters',file.read_text())
                     self.assertNotIn('synthetic-test-key',file.read_text())
                     self.assertNotIn('Electrocatalysis is central to electrified energy conversion technologies',file.read_text())
+                    self.assertNotIn('As conflicts and frequent natural disasters intensify',file.read_text())
                 self.assertFalse(any(out.glob('*.request.json')))
             finally:
                 r.ROOT=old_root;v1.load_core=old_load;r.read_remote=old_read;r.put_remote=old_put

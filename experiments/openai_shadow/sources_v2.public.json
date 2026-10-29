@@ -34,7 +34,9 @@
           "Nature Water"
         ]
       }
-    ]
+    ],
+    "identity_reference": "Solar-operated interlayer electrothermal evaporator enabling instant high-flux freshwater production across multiple scenarios; DOI 10.1038/s44221-026-00734-6",
+    "user_provided_abstract": "As conflicts and frequent natural disasters intensify, timely access to freshwater from multiple resources is extremely important for human survival. Electrothermal desalination is a promising solution for the development of green energy-driven, miniaturized and high-flux systems. However, traditional electrothermal desalination suffers from significant heat loss, which limits the improvement of the apparent energy efficiency, resulting in excessive energy consumption and a reliance on bulky equipment. Here we present an interlayer electrothermal evaporator (IEE) that reduces heat loss and energy consumption by nearly two-thirds compared with a bulk electrothermal evaporator. When the photothermal effect of solar energy is considered, the IEE attains an impressive apparent energy efficiency of 93.31% with a freshwater flux of 69.46 l m−2 h−1. Significantly, the IEE uses solar cells to supply green electricity and incorporates a Fresnel lens for solar energy concentration, constituting a portable freshwater production system for outdoor application. The device produces 1.64 l of freshwater within 8 h with an evaporator area of only 30.72 cm2, which is sufficient to meet the daily needs of individuals, even from challenging water sources such as sediment water, oily water, high-salinity wastewater and strongly acidic water. Therefore, this green energy-driven IEE system enables high-flux freshwater production across diverse scenarios, providing a sustainable and scalable solution to mitigate freshwater scarcity."
   },
   "P508": {
     "routes": [
