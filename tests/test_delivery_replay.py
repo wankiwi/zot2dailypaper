@@ -95,6 +95,15 @@ def test_saved_50_end_to_end_sync_before_smtp_and_repeat_is_noop(batch):
     assert len(batch.sends) == 1 and batch.events == ['d1', 'smtp']
 
 
+def test_delivery_only_cost_report_does_not_recharge_saved_summaries(batch):
+    from zot2dailypaper.construct_email import email_plain_text
+    run(batch)
+    plain = email_plain_text(batch.sends[0])
+    assert 'Delivery-only replay: no new model API calls' in plain
+    assert 'No model API calls: new estimated API expenditure 0' in plain
+    assert '50 previously generated summaries reused: no new generation cost' in plain
+
+
 def test_smtp_uncertainty_preserves_intent_and_blocks_another_attempt(batch, monkeypatch):
     attempts = []
     def uncertain(*args):

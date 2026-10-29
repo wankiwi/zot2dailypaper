@@ -1,0 +1,53 @@
+ZOTERO · RESEARCH DIGEST
+
+Daily Papers
+
+1 recommendation · Journal and preprint selections ranked by relevance; random picks sampled from remaining eligible papers
+
+Scored using abstract similarity to your library (100%). Legacy mean ranking averages keywords and weights library references by when they were added. Scores range from 0 to 100. Higher scores mean a closer match, not a probability or accuracy estimate. Scores are shown to one decimal place.
+
+LLM 费用提醒 / Pricing warning
+
+Synthetic preview only: no API calls or email sends. All usage is invented; the USD demo tariff is illustrative and does not configure or migrate any provider.
+
+API 费用 / API cost — 本次运行 / this run
+
+按供应商返回用量和价格表估算；不是供应商账单。 Usage-priced estimates, not provider invoices; no account balance, taxes or currency conversion. Model API usage only; prior runs are excluded.
+
+Delivery-only replay: no new model API calls or summary generation.
+
+LLM summary generation disabled; other API types are reported independently.
+
+No model API calls: new estimated API expenditure 0 (no currency charge).
+
+No new summary budget reservation in this run; prior reservations are preserved, and their expenditure is unknown here.
+
+1 previously generated summaries reused: no new generation cost; their historical cost is not charged again or reconstructed.
+
+期刊 / Journals (0)
+
+No new recommendations in this group.
+
+预印本 / Preprints（含会议论文） (1)
+
+arxiv · Date unavailable · Source: arxiv
+
+1. Synthetic API-cost preview: replay
+
+Example Author
+
+Unknown Affiliation
+
+Relevance: 85/100
+
+AI summary
+
+该合成示例仅用于预览每日邮件中的费用报告。
+
+Article (https://example.org/synthetic)
+
+随机推荐 / Random (0)
+
+No new recommendations in this group.
+
+zot2dailypaper · Based on Zotero-arXiv-Daily. To stop delivery, disable the scheduled workflow in GitHub Actions.

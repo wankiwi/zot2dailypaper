@@ -6,7 +6,7 @@ from .retriever import get_retriever_cls
 from .protocol import CorpusPaper
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
-from .identity import canonical_doi, paper_doi, paper_dois, title_key, deduplicate
+from .identity import canonical_doi, paper_doi, paper_dois, paper_id, title_key, deduplicate
 from .state import State
 from .output import write_rss
 from .reranker import get_reranker_cls
@@ -24,6 +24,8 @@ from time import monotonic
 from collections import Counter
 from .metadata import recover_metadata
 from .recommendation_sync import sync_client
+from .api_costs import ApiCosts
+from threading import Lock
 
 
 def normalize_path_patterns(patterns: list[str] | ListConfig | None, config_key: str) -> list[str] | None:
@@ -66,6 +68,10 @@ class Executor:
         self.llm_retry_at = None
         self.effective_interest_weights = None
         self.model_requests = ModelRequests()
+        self.api_costs = ApiCosts()
+        self.reranker.api_costs = self.api_costs
+        self.reused_summary_keys = set()
+        self.summary_reuse_lock = Lock()
         self.library_dois, self.library_titles, self.library_titles_without_doi = set(), set(), set()
 
     def fetch_zotero_corpus(self) -> list[CorpusPaper]:
@@ -124,6 +130,9 @@ class Executor:
         return corpus
 
     def _enrich(self, paper):
+        if paper.has_ai_summary:
+            with self.summary_reuse_lock:
+                self.reused_summary_keys.add(paper_id(paper))
         if self.config.llm.get('input_mode', 'abstract') == 'full_text' and self.openai_client:
             retriever = self.retrievers.get(paper.source)
             if retriever:
@@ -181,6 +190,12 @@ class Executor:
         if maximum < 1 or not 1 <= workers <= 8:
             raise ValueError('max_paper_num must be positive and enrichment_workers must be between 1 and 8')
         errors = []
+        self.api_costs = ApiCosts()
+        self.summary_reuse_lock = Lock()
+        if hasattr(self, 'reranker'):
+            self.reranker.api_costs = self.api_costs
+        # Pending saved summaries are delivered without generating them again.
+        self.reused_summary_keys = {paper_id(p) for p in state.pending('email') if p.has_ai_summary} if email_enabled else set()
         self.model_requests = ModelRequests()
         self.llm_blocked_reason = self.llm_blocked_code = self.llm_blocked_day = self.llm_retry_at = None
         self.llm_blocked_timezone = None
@@ -205,10 +220,12 @@ class Executor:
                     reasons = dict(Counter(p.tldr_error_reason or p.tldr_error or 'not_generated'
                                            for p in pending if not p.has_ai_summary))
                     logger.info(f'Email AI summaries: {generated} generated; {len(pending) - generated} unavailable; reasons={reasons}')
+                    self.api_costs.saved_summaries = sum(p.has_ai_summary and paper_id(p) in self.reused_summary_keys for p in pending)
                     send_email(self.config, render_email(pending, affiliation_max_chars=self.config.email.get('affiliation_max_chars', 180),
                                                          zotero_action_origin=self.config.email.get('zotero_action_origin'),
                                                          interest_weights=self.effective_interest_weights,
-                                                         ranking_strategy=self.config.reranker.get('strategy', 'multi_interest_profile')))
+                                                         ranking_strategy=self.config.reranker.get('strategy', 'multi_interest_profile'),
+                                                         api_costs=self.api_costs, llm_enabled=self.config.llm.get('enabled', True)))
                     logger.info(f'SMTP accepted {len(pending)} recommendations')
                     state.mark(pending, 'email')
                     try:
@@ -312,6 +329,7 @@ class Executor:
                 self.openai_client = OpenAI(api_key=self.config.llm.api.key, base_url=self.config.llm.api.base_url,
                                             max_retries=0, timeout=policy['timeout_seconds'], http_client=self.llm_http_client)
                 self.model_requests = prepare_budget(self.config.llm)
+                self.model_requests.attach_costs(self.api_costs)
             except BudgetUnavailable as exc:
                 self._close_llm()
                 self.llm_blocked_reason = str(exc)

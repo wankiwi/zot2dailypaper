@@ -132,32 +132,36 @@ class Paper:
             request_client = no_retry_client(openai_client, policy['timeout_seconds'])
             requests.check_window()  # Recheck after client setup, immediately before the paid boundary.
             self.tldr_attempts += 1
-            response = request_client.chat.completions.create(
-                messages=[
-                    {
-                        "role": "system",
-                        "content": system,
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                **kwargs
-            )
-            audit_response(response, kwargs['model'])
-            finish = getattr(response.choices[0], 'finish_reason', None)
-            if finish != 'stop':
-                raise SummaryUnavailable({'length': 'output_truncated', 'content_filter': 'content_filtered'}.get(finish, 'invalid_response')
-                                         if isinstance(finish, str) else 'invalid_response')
-            tldr = response.choices[0].message.content
-            if not isinstance(tldr, str) or not tldr.strip():
-                raise SummaryUnavailable('empty_response')
-            if getattr(response.choices[0].message, 'tool_calls', None) or getattr(response.choices[0].message, 'refusal', None):
-                raise SummaryUnavailable('invalid_response')
-            if str(lang).casefold() in ('chinese', '中文', 'zh', 'zh-cn') and not re.search(r'[\u4e00-\u9fff]', tldr):
-                raise SummaryUnavailable('summary_language_mismatch')
-            if (len([part for part in re.split(r'[。！？!?]+', tldr) if part.strip()]) != 1
-                    or re.search(r'(?m)^\s*(?:[-*#]\s|\d+[.)]\s)', tldr)):
-                raise SummaryUnavailable('summary_format_invalid')
-            return tldr.strip()
+            with requests.api_costs.attempt(getattr(openai_client, 'base_url', requests.expected_endpoint),
+                                            kwargs['model'], 'chat', schedule=requests.price_schedule,
+                                            retry=attempt > 0) as cost:
+                response = request_client.chat.completions.create(
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": system,
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    **kwargs
+                )
+                cost.observe(response)
+                audit_response(response, kwargs['model'])
+                finish = getattr(response.choices[0], 'finish_reason', None)
+                if finish != 'stop':
+                    raise SummaryUnavailable({'length': 'output_truncated', 'content_filter': 'content_filtered'}.get(finish, 'invalid_response')
+                                             if isinstance(finish, str) else 'invalid_response')
+                tldr = response.choices[0].message.content
+                if not isinstance(tldr, str) or not tldr.strip():
+                    raise SummaryUnavailable('empty_response')
+                if getattr(response.choices[0].message, 'tool_calls', None) or getattr(response.choices[0].message, 'refusal', None):
+                    raise SummaryUnavailable('invalid_response')
+                if str(lang).casefold() in ('chinese', '中文', 'zh', 'zh-cn') and not re.search(r'[\u4e00-\u9fff]', tldr):
+                    raise SummaryUnavailable('summary_language_mismatch')
+                if (len([part for part in re.split(r'[。！？!?]+', tldr) if part.strip()]) != 1
+                        or re.search(r'(?m)^\s*(?:[-*#]\s|\d+[.)]\s)', tldr)):
+                    raise SummaryUnavailable('summary_format_invalid')
+                return tldr.strip()
         for attempt in range(policy['max_attempts']):
             try:
                 # The durable whole-day claim stays consumed; EACH dispatch
