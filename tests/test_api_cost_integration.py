@@ -1,11 +1,12 @@
 """Real SDK parsing + local pipeline/state; all HTTP and SMTP are synthetic."""
 from decimal import Decimal
+from contextlib import contextmanager
 import json
 
 import httpx
 import numpy as np
 from omegaconf import open_dict
-from openai import OpenAI, InternalServerError
+from openai import OpenAI, InternalServerError, APITimeoutError
 import pytest
 
 from tests.canned_responses import make_sample_paper
@@ -50,6 +51,26 @@ def chat_config(config):
 def sdk(handler, endpoint=ENDPOINT):
     return OpenAI(api_key='synthetic-test-key', base_url=endpoint, max_retries=0,
                   http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+
+
+@contextmanager
+def embedding_sdk(monkeypatch, handler):
+    clients = []
+    def http_client(**kwargs):
+        return httpx.Client(transport=httpx.MockTransport(handler), **kwargs)
+    def create(**kwargs):
+        assert 'max_retries' not in kwargs  # Preserve the pre-feature SDK policy.
+        client = OpenAI(**kwargs)
+        assert client.max_retries == 2
+        clients.append(client)
+        return client
+    monkeypatch.setattr('zot2dailypaper.reranker.api.DefaultHttpxClient', http_client)
+    monkeypatch.setattr('zot2dailypaper.reranker.api.OpenAI', create)
+    try:
+        yield clients
+    finally:
+        for client in clients:
+            client.close()
 
 
 def test_sdk_retry_counts_each_dispatch_once_and_timeout_is_not_zero(config, monkeypatch):
@@ -136,11 +157,7 @@ def test_embedding_calls_cache_hits_and_missing_tariff_are_reported(config, monk
             'data': [{'object': 'embedding', 'embedding': [1, 0, 0], 'index': i}
                      for i in range(len(payload['input']))],
             'usage': {'prompt_tokens': 10, 'total_tokens': 10}})
-    with sdk(handler, str(config.reranker.api.base_url)) as client:
-        def create(**kwargs):
-            assert kwargs['max_retries'] == client.max_retries == 0
-            return client
-        monkeypatch.setattr('zot2dailypaper.reranker.api.OpenAI', create)
+    with embedding_sdk(monkeypatch, handler):
         reranker = ApiReranker(config)
         first = reranker.get_similarity_score(['first'], ['second'])
         repeated = reranker.get_similarity_score(['first'], ['second'])
@@ -153,18 +170,84 @@ def test_embedding_calls_cache_hits_and_missing_tariff_are_reported(config, monk
     assert 'price schedule unavailable' in plain and 'LLM summary generation disabled' in plain
 
 
-def test_embedding_sdk_has_no_hidden_failed_retries(config, monkeypatch):
+@pytest.mark.parametrize('failure', ['http503', 'timeout'])
+def test_embedding_sdk_keeps_default_retries_and_counts_every_failed_dispatch(config, monkeypatch, failure):
+    calls = []
+    monkeypatch.setattr('openai._base_client.time.sleep', lambda _: None)
+    def handler(request):
+        calls.append(True)
+        if failure == 'timeout':
+            raise httpx.ReadTimeout('PRIVATE_BODY', request=request)
+        return httpx.Response(503, json={'error': {'message': 'PRIVATE_BODY'}})
+    with embedding_sdk(monkeypatch, handler):
+        reranker = ApiReranker(config)
+        with pytest.raises(APITimeoutError if failure == 'timeout' else InternalServerError):
+            reranker.get_similarity_score(['first'], ['second'])
+    assert len(calls) == len(reranker.api_costs.attempts) == 3
+    assert [event.retry for event in reranker.api_costs.attempts] == [False, True, True]
+    assert all(event.failed for event in reranker.api_costs.attempts)
+    assert 'PRIVATE' not in '\n'.join(reranker.api_costs.lines())
+
+
+def test_embedding_retry_recovers_before_ranking_with_usage_for_failed_and_successful_calls(config, monkeypatch):
+    calls = []
+    def handler(request):
+        payload = json.loads(request.content)
+        calls.append(True)
+        if len(calls) == 1:
+            return httpx.Response(503, headers={'retry-after-ms': '1'}, json={
+                'error': {'message': 'PRIVATE_BODY'}, 'model': payload['model'],
+                'usage': {'prompt_tokens': 5, 'total_tokens': 5}})
+        return httpx.Response(200, json={'object': 'list', 'model': payload['model'],
+            'data': [{'object': 'embedding', 'embedding': [1, 0, 0], 'index': i}
+                     for i in range(len(payload['input']))],
+            'usage': {'prompt_tokens': 10, 'total_tokens': 10}})
+    with embedding_sdk(monkeypatch, handler):
+        reranker = ApiReranker(config)
+        np.testing.assert_equal(reranker.get_similarity_score(['first'], ['second']), [[1]])
+        np.testing.assert_equal(reranker.get_similarity_score(['first'], ['second']), [[1]])
+    assert len(calls) == len(reranker.api_costs.attempts) == 2
+    first, final = reranker.api_costs.attempts
+    assert first.failed and first.usage['input'] == 5 and final.retry and not final.failed
+    assert final.usage['input'] == 10
+    assert all(event.amount is None for event in (first, final))  # No reviewed embedding tariff.
+
+
+def test_embedding_provider_no_retry_header_still_stops_immediately(config, monkeypatch):
     calls = []
     def handler(request):
         calls.append(True)
-        return httpx.Response(503, json={'error': {'message': 'PRIVATE_BODY'}})
-    with sdk(handler, str(config.reranker.api.base_url)) as client:
-        monkeypatch.setattr('zot2dailypaper.reranker.api.OpenAI', lambda **kwargs: client)
+        return httpx.Response(503, headers={'x-should-retry': 'false'}, json={'error': {'message': 'PRIVATE_BODY'}})
+    with embedding_sdk(monkeypatch, handler):
         reranker = ApiReranker(config)
         with pytest.raises(InternalServerError):
             reranker.get_similarity_score(['first'], ['second'])
     assert len(calls) == len(reranker.api_costs.attempts) == 1
-    assert reranker.api_costs.attempts[0].failed
+
+
+def test_embedding_stream_read_timeout_preserves_sdk_recovery_and_unknown_usage(config, monkeypatch):
+    calls = []
+    monkeypatch.setattr('openai._base_client.time.sleep', lambda _: None)
+    class BrokenBody(httpx.SyncByteStream):
+        def __iter__(self):
+            raise httpx.ReadTimeout('PRIVATE_PARTIAL_BODY')
+            yield b''
+    def handler(request):
+        calls.append(True)
+        if len(calls) == 1:
+            return httpx.Response(200, stream=BrokenBody())
+        payload = json.loads(request.content)
+        return httpx.Response(200, json={'object': 'list', 'model': payload['model'],
+            'data': [{'object': 'embedding', 'embedding': [1, 0, 0], 'index': i}
+                     for i in range(len(payload['input']))],
+            'usage': {'prompt_tokens': 10, 'total_tokens': 10}})
+    with embedding_sdk(monkeypatch, handler):
+        reranker = ApiReranker(config)
+        np.testing.assert_equal(reranker.get_similarity_score(['first'], ['second']), [[1]])
+    assert len(calls) == len(reranker.api_costs.attempts) == 2
+    first, final = reranker.api_costs.attempts
+    assert first.failed and first.usage == {} and first.amount is None
+    assert final.retry and not final.failed and final.usage['input'] == 10
     assert 'PRIVATE' not in '\n'.join(reranker.api_costs.lines())
 
 
@@ -228,9 +311,8 @@ def test_one_daily_report_retains_embedding_usage_when_summary_guard_attaches(pi
     def summary(request):
         chats.append(True)
         return httpx.Response(200, json=body())
-    with sdk(embeddings, str(pipeline.reranker.api.base_url)) as embedding_client:
+    with embedding_sdk(monkeypatch, embeddings):
         monkeypatch.setattr(ApiReranker, 'get_similarity_score', API_SIMILARITY)
-        monkeypatch.setattr('zot2dailypaper.reranker.api.OpenAI', lambda **kwargs: embedding_client)
         monkeypatch.setattr('zot2dailypaper.executor.OpenAI', lambda **kwargs: sdk(summary))
         monkeypatch.setattr('zot2dailypaper.executor.prepare_budget', lambda _: guard())
         monkeypatch.setattr('zot2dailypaper.executor.send_email', lambda config, html: sent.append(html))
@@ -249,6 +331,28 @@ def test_one_daily_report_retains_embedding_usage_when_summary_guard_attaches(pi
         assert 'CNY 0.00048000' in plain
     else:
         assert 'LLM summary generation disabled' in plain
+
+
+def test_pipeline_embedding_failure_does_not_log_private_provider_body(pipeline, monkeypatch):
+    with open_dict(pipeline):
+        pipeline.output.email.enabled = True
+        pipeline.output.rss.enabled = False
+        pipeline.state.enabled = True
+    messages = []
+    monkeypatch.setattr('openai._base_client.time.sleep', lambda _: None)
+    monkeypatch.setattr('zot2dailypaper.executor.logger.error', lambda message: messages.append(message))
+    monkeypatch.setattr('zot2dailypaper.executor.send_email', lambda *a: pytest.fail('No recommendations to deliver'))
+    def handler(request):
+        return httpx.Response(503, json={'error': {'message': 'PRIVATE_PROFILE_AND_ACCOUNT'}})
+    with embedding_sdk(monkeypatch, handler):
+        monkeypatch.setattr(ApiReranker, 'get_similarity_score', API_SIMILARITY)
+        executor = Executor(pipeline)
+        monkeypatch.setattr(executor.retrievers['arxiv'], 'retrieve_papers', lambda: [make_sample_paper()])
+        with pytest.raises(RuntimeError, match='Embedding API unavailable') as failure:
+            executor.run()
+    assert messages and 'PRIVATE' not in str(failure.value) + ' '.join(messages)
+    assert len(executor.api_costs.attempts) == 3
+    assert 'PRIVATE' not in '\n'.join(executor.api_costs.lines())
 
 
 def test_budget_report_prices_match_admission_snapshot_without_remote_writes(config, monkeypatch):

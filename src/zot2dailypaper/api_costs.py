@@ -158,11 +158,16 @@ class ApiCosts:
         # Read the winning guard's grant. Do not read/write/reconcile remote state.
         self.reservation = (str(Decimal(str(amount))), day, timezone_name)
 
-    @contextmanager
-    def attempt(self, endpoint, model, kind, *, schedule=None, retry=False):
+    def start_attempt(self, endpoint, model, kind, *, schedule=None, retry=False):
+        """Record a physical dispatch, also usable by HTTP request/response hooks."""
         event = Attempt(provider_name(endpoint), _label(model), kind, bool(retry), schedule)
         with self._lock:
             self.attempts.append(event)
+        return event
+
+    @contextmanager
+    def attempt(self, endpoint, model, kind, *, schedule=None, retry=False):
+        event = self.start_attempt(endpoint, model, kind, schedule=schedule, retry=retry)
         try:
             yield event
         except BaseException as exc:

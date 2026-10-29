@@ -13,7 +13,7 @@ from .reranker import get_reranker_cls
 from .interest_profile import interest_profile
 from .construct_email import render_email
 from .utils import send_email
-from openai import OpenAI, DefaultHttpxClient
+from openai import OpenAI, DefaultHttpxClient, APIError
 from .llm import ModelRequests, request_policy
 from .budget import budget_plan, prepare_budget, BudgetUnavailable
 from .preprint_interests import enabled_sources
@@ -202,8 +202,10 @@ class Executor:
         try:
             ranked = self._recommend(state, errors, maximum, workers)
         except Exception as exc:
-            logger.error(f'Cannot prepare new recommendations: {exc}')
-            errors.append(f'recommendations: {exc}')
+            # SDK exceptions may include provider bodies/account identifiers.
+            detail = 'Embedding API unavailable; provider details withheld' if isinstance(exc, APIError) else str(exc)
+            logger.error(f'Cannot prepare new recommendations: {detail}')
+            errors.append(f'recommendations: {detail}')
             ranked = []
         finally:
             self._close_llm()

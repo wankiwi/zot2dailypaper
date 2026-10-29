@@ -4,7 +4,7 @@ The existing daily recommendation email now includes the current run's API usage
 
 Summary dispatches snapshot the same reviewed SiliconFlow/DeepSeek input/output rates that admitted the winning `BudgetRequests` reservation. Each schedule has a rate/date fingerprint, verification date, validity date and currency. Expired schedules are marked stale; the existing pricing warning and conservative budget policy still apply. Rendering cost telemetry does not fetch prices, query account balances, or write budget state. The normal daily renderer retains its existing public pricing warning check; delivery-only replay and the new synthetic preview suppress that check.
 
-Each actual SDK dispatch creates exactly one attempt. Automatic retries are disabled at both chat and optional API-embedding boundaries. Chat's existing bounded application retries each receive their own budget precharge and usage record. Tokens are captured before summary content validation, so truncated, refused or otherwise invalid summaries still contribute their measured estimate. Exceptions with usable provider usage retain that usage; timeouts, missing/malformed usage, unverified response models and missing tariffs have unknown cost. A known subtotal with any unknown attempts is explicitly incomplete, never a total that silently treats unknown as zero. Positive estimates smaller than the display precision are shown with a less-than bound.
+Each actual HTTP dispatch creates exactly one attempt. Chat retains its existing zero SDK retries; its bounded application retries each receive their own budget precharge and usage record. Optional API embeddings retain their original SDK retry policy (two retries in the installed/locked SDK). HTTPX request/response hooks observe every physical attempt, including failures before a response and usage on failed HTTP responses, without changing retry decisions or ranking formulas. Tokens are captured before summary content validation, so truncated, refused or otherwise invalid summaries still contribute their measured estimate. Exceptions with usable provider usage retain that usage; timeouts, missing/malformed usage, unverified response models and missing tariffs have unknown cost. A known subtotal with any unknown attempts is explicitly incomplete, never a total that silently treats unknown as zero. Positive estimates smaller than the display precision are shown with a less-than bound.
 
 Input/output, cache reads/writes and reasoning token counts are shown independently; unreported counts are unknown. For OpenAI-compatible chat usage, cache counts are subsets of prompt/input and reasoning is a subset of completion/output, so neither is added twice. The reviewed SiliconFlow schedule applies its conservative peak input rate to all input tokens, without claiming cache discounts or time-of-day savings. This is a usage-priced estimate, not a provider invoice, settled charge, account balance or tax calculation.
 
@@ -22,19 +22,19 @@ Only numeric usage, safe model identifiers and fixed provider labels are retaine
 
 Generate the five HTML/plaintext previews with `uv run --frozen python scripts/preview_api_costs.py`. They never load credentials or contact services; synthetic USD prices are examples only.
 
-Publishing requires review and permission to push/open a PR, then merge/deploy through the existing process. No new schedule, recipient, credential or settings change, state migration or historical backfill is required. Before rollout, review the price-staleness notice and the optional embedding behavior: its SDK retries are now explicitly zero so failed attempts cannot remain hidden. A newly deployed run will report its own instrumented usage; local tests cannot establish provider invoicing or SMTP inbox delivery.
+Publishing requires review and permission to push/open a PR, then merge/deploy through the existing process. No new schedule, recipient, credential or settings change, state migration or historical backfill is required. Before rollout, review the price-staleness notice. Embedding retries remain enabled under the original SDK policy and are reported separately; the initial local implementation's zero-retry change was removed after audit to preserve recovery from temporary failures. A newly deployed run will report its own instrumented usage; local tests cannot establish provider invoicing or SMTP inbox delivery.
 
-Verified locally on 2026-10-29 using the existing Python 3.13 environment, with this checkout selected explicitly so subprocess tests import it too:
+The original commit `6e73bdd` was verified locally on 2026-10-29 using the existing Python 3.13 environment, with this checkout selected explicitly so subprocess tests import it too:
 
 ```bash
 PYTHONPATH=/workspace/zot2dailypaper/src /workspace/zotero-arxiv-daily/.venv/bin/python -m pytest -q
 # 1362 passed, 1 skipped (optional Playwright unavailable in this venv), 1 deselected (slow)
 
 PYTHONPATH=/workspace/zot2dailypaper/src /workspace/zotero-arxiv-daily/.venv/bin/python -m pytest tests/test_api_costs.py tests/test_api_cost_integration.py tests/test_budget.py tests/test_budget_local_day.py tests/test_pricing.py tests/test_pricing_state.py tests/test_delivery_replay.py -q
-# 163 passed after the final admission-price snapshot hardening
+# 163 passed after the original admission-price snapshot hardening
 
 ruff check --select F401,F821,F841 src scripts tests
 git diff --check
 ```
 
-Five synthetic HTML/plaintext pairs and three Chromium screenshots with overflow metrics are included under `docs/previews/api-costs/`. Browser verification used the separately available system Playwright/Chromium with external requests blocked. No paid requests, real email, production state writes or publication operations were performed. Git pushes inside existing concurrency tests target disposable local bare repositories only.
+Five synthetic HTML/plaintext pairs and three Chromium screenshots with overflow metrics are included under `docs/previews/api-costs/`. Browser verification used the separately available system Playwright/Chromium with external requests blocked. These local checks use no paid requests, real email, or production state writes. Git pushes inside existing concurrency tests target disposable local bare repositories only.
