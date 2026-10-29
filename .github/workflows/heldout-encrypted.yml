@@ -1,0 +1,96 @@
+name: Held-out encrypted pilot
+on:
+  workflow_call:
+    secrets:
+      private_configuration:
+        required: true
+      ZOTERO_ID:
+        required: true
+      ZOTERO_KEY:
+        required: true
+      OPENAI_API_KEY:
+        required: true
+      OPENALEX_API_KEY:
+        required: false
+      OPENREVIEW_USERNAME:
+        required: false
+      OPENREVIEW_PASSWORD:
+        required: false
+permissions:
+  contents: read
+jobs:
+  pilot:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/experiment/openai-shadow-20261029' && github.run_attempt == 1 }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write # Fixed experimental shared cost ledger only.
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Isolated frozen production baseline checkout
+        uses: actions/checkout@v6
+        with:
+          ref: 385a7574def6f948ca60f57c3f95bb6b28c6f2c5
+          path: .pilot-baseline
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: .pilot-baseline/uv.lock
+      - name: Offline synthetic privacy, crypto and budget guards
+        working-directory: .pilot-baseline
+        run: uv run --frozen python -m unittest discover -s "$GITHUB_WORKSPACE/experiments/openai_shadow/heldout" -p 'test*.py' -v
+      - name: Source and real baseline preflight, then the authorized bounded pilot
+        working-directory: .pilot-baseline
+        env:
+          BASELINE_ROOT: ${{ github.workspace }}/.pilot-baseline
+          CUSTOM_CONFIG: ${{ secrets.private_configuration }}
+          ZOTERO_ID: ${{ secrets.ZOTERO_ID }}
+          ZOTERO_KEY: ${{ secrets.ZOTERO_KEY }}
+          OPENALEX_API_KEY: ${{ secrets.OPENALEX_API_KEY }}
+          OPENREVIEW_USERNAME: ${{ secrets.OPENREVIEW_USERNAME }}
+          OPENREVIEW_PASSWORD: ${{ secrets.OPENREVIEW_PASSWORD }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY_ISSUER: https://api.openai.com
+          OPENAI_API_BASE: https://api.openai.com/v1
+          GH_TOKEN: ${{ github.token }}
+          HF_HUB_DISABLE_TELEMETRY: '1'
+          HF_HUB_DISABLE_PROGRESS_BARS: '1'
+          TOKENIZERS_PARALLELISM: 'false'
+          TRANSFORMERS_VERBOSITY: error
+        run: |
+          umask 077
+          uv run --frozen python "$GITHUB_WORKSPACE/experiments/openai_shadow/heldout/runner.py" > "$RUNNER_TEMP/heldout-private-run.log" 2>&1
+      - name: Safe status only
+        if: ${{ always() }}
+        run: |
+          python3 - <<'PY'
+          import json,os,pathlib
+          path=pathlib.Path(os.environ['RUNNER_TEMP'])/'heldout-public/status.public.json'
+          if path.exists():
+              data=json.loads(path.read_text())
+              allowed=('experiment','status','phase','api_requests_this_run','historical_estimated_usd','cumulative_budget','baseline_ready','sample_count','error_class','reason','remote_accounting_readable')
+              print(json.dumps({key:data[key] for key in allowed if key in data},sort_keys=True))
+          else:print('{"status":"runner_setup_failed","api_requests_this_run":0}')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: heldout-sealed-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/heldout-public/result.sealed.json
+            ${{ runner.temp }}/heldout-public/status.public.json
+          retention-days: 30
+          if-no-files-found: ignore
+      - name: Remove unexported private temp files
+        if: ${{ always() }}
+        run: |
+          python3 - <<'PY'
+          import os,pathlib,shutil
+          temp=pathlib.Path(os.environ['RUNNER_TEMP'])
+          shutil.rmtree(temp/'heldout-private',ignore_errors=True)
+          (temp/'heldout-private-run.log').unlink(missing_ok=True)
+          (pathlib.Path(os.environ['GITHUB_WORKSPACE'])/'.pilot-baseline/config/runtime.yaml').unlink(missing_ok=True)
+          PY

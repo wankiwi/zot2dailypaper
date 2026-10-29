@@ -1,4 +1,8 @@
-# Same-five v2: complete evidence before relevance scoring
+# Isolated ranking experiments
+
+The same-five development test below is complete. The separately authorized, frozen **24-paper held-out pilot** uses **`mode=heldout`** and one-time encrypted export; see [its instructions](heldout/README.md). New paper lists, paired rankings, private profiles and evaluation mappings are not published as plaintext. Both experiments share the original cumulative USD 1 cap.
+
+## Same-five v2: complete evidence before relevance scoring
 
 v1 completed one Decisions request: 1736 input tokens, zero cache/output, usage-derived cost **USD 0.000173600**. Its original USD 1 reservation, run ID, artifact digest and verified receipt are preserved under `history_v1` in the **same** `state/budget.json`. The parent verified the original ZIP. This reconciliation settles known v1 usage; it does not erase the first reservation or create a new allowance. Remaining before v2: **USD 0.999826400**.
 

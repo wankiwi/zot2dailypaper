@@ -5,7 +5,7 @@ on:
       mode:
         description: tests = sources only (no API secret); llm = one authorized cumulative v2 score
         type: choice
-        options: [tests, llm]
+        options: [tests, llm, heldout]
         default: tests
       collection_name_sha256:
         description: Unused compatibility input; leave empty
@@ -74,3 +74,16 @@ jobs:
           path: ${{ runner.temp }}/shadow-v2-output/
           retention-days: 90
           if-no-files-found: ignore
+  heldout-pilot:
+    if: ${{ inputs.mode == 'heldout' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/experiment/openai-shadow-20261029' && github.run_attempt == 1 }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/heldout-encrypted.yml
+    secrets:
+      private_configuration: ${{ vars.CUSTOM_CONFIG }}
+      ZOTERO_ID: ${{ secrets.ZOTERO_ID }}
+      ZOTERO_KEY: ${{ secrets.ZOTERO_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENALEX_API_KEY: ${{ secrets.OPENALEX_API_KEY }}
+      OPENREVIEW_USERNAME: ${{ secrets.OPENREVIEW_USERNAME }}
+      OPENREVIEW_PASSWORD: ${{ secrets.OPENREVIEW_PASSWORD }}

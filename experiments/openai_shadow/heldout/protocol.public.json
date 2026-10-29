@@ -1,0 +1,113 @@
+{
+  "id": "heldout-pilot-20261029-v1",
+  "frozen_at_utc": "2026-10-29T11:28:55.869387+00:00",
+  "status": "protocol_frozen_before_any_real_candidate_selection",
+  "production_source_commit": "385a7574def6f948ca60f57c3f95bb6b28c6f2c5",
+  "rubric_sha256": "441e10d3feb38c3ed9e630d109eec532531387c4009dc560bea2c1d59d15bef9",
+  "rubric_policy": "Exact original rubric and ordered levels; no tuning after human labels.",
+  "candidate_count": 24,
+  "pool": "Current source pipeline using the production scheduled-profile configuration plus existing CUSTOM_CONFIG. Freeze retrieval date, source config hash and canonical pool IDs privately before any Decisions request. No production workflow or delivery-history writes.",
+  "eligibility": {
+    "abstract": "Complete nonempty public abstract only, no title-only scoring, no truncation; bound and exclusions recorded.",
+    "exclude_development_dois": [
+      "10.1038/s44221-026-00734-6",
+      "10.1002/anie.3951000",
+      "10.1134/S1995080225607970",
+      "10.1021/jacs.6c09028",
+      "10.26434/chemrxiv.15002639/v2"
+    ],
+    "exclude_development_arxiv": [
+      "2610.35965",
+      "2610.37581"
+    ],
+    "exclude_duplicates": "Canonical DOI/related DOI; arXiv IDs without versions; ChemRxiv DOI base without version; normalized-title exact and token-Dice >=0.90, including comparisons with all five development titles.",
+    "report": "Per-source counts for fetched, missing/overbound abstracts, development matches, duplicates, eligible and sampled. No hiding missingness."
+  },
+  "sampling": {
+    "seed_basis": "SHA256 of this frozen protocol and each canonical paper ID; no handpicking.",
+    "strata_in_order": [
+      {
+        "n": 8,
+        "rule": "Round-robin source groups; deterministic hash draw within each group."
+      },
+      {
+        "n": 8,
+        "rule": "Round-robin configured direction indices; hash draw within each direction winner bin upper keyword-cosine quartile."
+      },
+      {
+        "n": 8,
+        "rule": "Near-topic candidates: upper-half keyword cosine intersect middle-half current-baseline rank; deterministic hash draw."
+      }
+    ],
+    "overlap": "Each paper selected once; exhausted strata filled by remaining eligible papers in deterministic hash order and exact shortfall/fallback recorded.",
+    "insufficient_pool": "Stop if fewer than 24 eligible unique papers. Do not alter rules to seek favorable cases.",
+    "scope_note": "Stratified pilot; within-pool metrics are not estimates of unselected feed prevalence."
+  },
+  "baseline": {
+    "strategy": "Read actual multi_interest_profile settings, current keyword/Zotero weights and path filters from existing private runtime configuration; no legacy_mean or keyword-only substitute.",
+    "code": "Use current production LocalReranker.rerank with pinned model/revision and default experiments; compare the same 24 full abstracts.",
+    "credentials": "Only existing Actions ZOTERO_ID/ZOTERO_KEY and CUSTOM_CONFIG references; availability not yet runtime-verified.",
+    "privacy": "Actual corpus and collection paths in memory only; hash the filtered ordered profile snapshot privately, never serialize or send corpus to OpenAI.",
+    "fails_closed": "Missing credentials/config, empty filtered Zotero corpus, wrong strategy/backend or inaccessible pinned weights block paid comparison."
+  },
+  "decisions": {
+    "model": "gpt-6-luna",
+    "endpoint": "https://api.openai.com/v1/decisions",
+    "payload_allowlist": [
+      "anonymous_id",
+      "public_title",
+      "complete_public_abstract",
+      "frozen_generic_rubric"
+    ],
+    "batching": "Deterministic greedy groups of at most four, split before calls if the existing conservative byte-token bound exceeds 272000. At most 24 requests, no automatic retry; reserve the sum of all planned bounds under the original global cap before the first request.",
+    "explanations": "Decisions scores/distributions only; no generated explanation claims.",
+    "private_delivery_gate": "No paid request until a usable authorized private result channel exists."
+  },
+  "accounting": {
+    "currency": "USD",
+    "original_limit_nanos": 1000000000,
+    "v1_run": "40847588593",
+    "v1_estimated_nanos": 173600,
+    "v2_run": "40863920037",
+    "v2_estimated_nanos": 263400,
+    "prior_total_nanos": 437000,
+    "remaining_nanos": 999563000,
+    "slot": "One explicitly authorized held-out pilot; preserve exact v1 original claim and completed v2 slot; do not reopen/reset them.",
+    "unknown_usage": "Keep conservative reservation and halt; no blind retry, new arbitrary claim ID or unrecorded spend.",
+    "records": "Measured input/cache-read/cache-write/output/reasoning usage, model, currency/price version, estimated spend versus reservation and unknown usage. No invoice verification claim."
+  },
+  "blind_pack": {
+    "order": "Independent random private shuffle; IDs unrelated to score, model, source group or selection stratum.",
+    "show": [
+      "anonymous_id",
+      "title",
+      "DOI_or_primary_link",
+      "short factual evidence-preserving paraphrase or explicitly permitted abstract",
+      "blank_relevance_label",
+      "optional_reason"
+    ],
+    "hide": [
+      "rankings",
+      "scores",
+      "model_names",
+      "sampling_strata",
+      "profile",
+      "Zotero",
+      "expected_labels"
+    ],
+    "labels": {
+      "0": "irrelevant",
+      "1": "peripheral",
+      "2": "useful",
+      "3": "must read"
+    },
+    "storage": "Private delivery only; no plaintext public Actions artifacts or logs. Raw newly fetched abstracts remain runtime temp only."
+  },
+  "evaluation_after_labels": {
+    "require": "Every sampled ID explicitly labeled 0,1,2,3; missing/unclicked is never negative.",
+    "precision_at_10": "Relevant = label >= 2; compare the same candidate set and frozen rankings.",
+    "ndcg_at_10": "Gain 2**label - 1; discount log2(rank+1); report undefined if all gains zero.",
+    "coverage": "Report source composition of pool, sample and each top 10 plus direction coverage privately.",
+    "limits": "Small pilot, no held-out label access until frozen predictions; no deployment or definitive validation claim."
+  }
+}
