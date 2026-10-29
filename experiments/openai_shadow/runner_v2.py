@@ -92,6 +92,7 @@ def source_stage(private,output,get=None):
         core.write_json(private/'fixture_manifest.json',{'papers_sha256':core.digest(complete)})
     print(json.dumps({'phase':'sources_only','ready':ready,'price_ready':price_ready,
                       'missing':[key for key,value in evidence.items() if value['evidence_status']!='abstract_available'],
+                      'source_failures':{key:value for key,value in evidence.items() if value['evidence_status']!='abstract_available'},
                       'api_requests_this_run':0},sort_keys=True))
     return status
 

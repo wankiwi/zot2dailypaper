@@ -64,6 +64,35 @@ class V2Tests(unittest.TestCase):
         html='<h1>Synthetic title</h1><p>10.1234/synthetic</p><h2>Abstract</h2><p>'+body+'</p><h2>No file available</h2><p>not abstract</p>'
         route={'identifier':'10.1234/synthetic','end_pattern':'^No file available'}
         self.assertEqual(s.html_abstract(html,route,'Synthetic title'),s.validated_text(body))
+    def test_inline_title_and_abstract_fragments_preserve_dom_text(self):
+        body='Synthetic abstract with interfacial water and enough evidence for bounded extraction. '*4
+        html='<h1>Solar-operated inter<span>layer</span> electro&shy;thermal evaporator</h1><meta name="citation_doi" content="10.1234/synthetic"><section id="Abs1-content"><p>'+body[:12]+'<wbr>'+body[12:]+'</p></section>'
+        route={'identifier':'10.1234/synthetic','end_pattern':'^Access options'}
+        self.assertEqual(s.html_abstract(html,route,'Solar-operated interlayer electrothermal evaporator'),s.validated_text(body))
+    def test_publisher_document_title_requires_exact_article_and_allowlisted_suffix(self):
+        body='Synthetic abstract for exact metadata matching without fuzzy title acceptance. '*4
+        route={'identifier':'10.1234/synthetic','end_pattern':'^Access options','publisher_suffixes':['Nature Water']}
+        html='<head><title>Synthetic title | Nature Water</title></head><p>10.1234/synthetic</p><section id="Abs1-content">'+body+'</section>'
+        self.assertEqual(s.html_abstract(html,route,'Synthetic title'),s.validated_text(body))
+        for changed in (html.replace('Nature Water','Another Publisher'),html.replace('Synthetic title |','Another Synthetic title |')):
+            with self.assertRaises(s.SourceStop):s.html_abstract(changed,route,'Synthetic title')
+        og='<meta property="og:title" content="Synthetic title"><p>10.1234/synthetic</p><section id="Abs1-content">'+body+'</section>'
+        self.assertEqual(s.html_abstract(og,route,'Synthetic title'),s.validated_text(body))
+    def test_declared_doi_must_match_even_if_expected_doi_is_in_related_references(self):
+        body='Synthetic abstract with enough text to test strict identifier validation. '*4
+        html='<h1>Synthetic title</h1><meta name="citation_doi" content="10.1234/another"><p>Related DOI 10.1234/synthetic</p><section id="Abs1-content">'+body+'</section>'
+        route={'identifier':'10.1234/synthetic','end_pattern':'^Access options'}
+        with self.assertRaisesRegex(s.SourceStop,'declared_source_doi_mismatch'):s.html_abstract(html,route,'Synthetic title')
+    def test_challenge_stays_blocked_with_bounded_nonbody_diagnostics(self):
+        html='<head><title>Access verification</title><link rel="canonical" href="https://example.org/article?session=hidden#fragment"></head><p>CHALLENGE_BODY_MUST_STAY_PRIVATE</p>'
+        with self.assertRaises(s.SourceStop) as caught:
+            s.html_abstract(html,{'identifier':'10.1234/synthetic'},'Synthetic title')
+        self.assertEqual(str(caught.exception),'source_title_mismatch')
+        diagnostic=caught.exception.diagnostics
+        self.assertEqual(diagnostic['observed_titles'],[{'field':'document_title','value':'Access verification'}])
+        self.assertEqual(diagnostic['canonical_urls'],['https://example.org/article'])
+        self.assertNotIn('CHALLENGE_BODY_MUST_STAY_PRIVATE',json.dumps(diagnostic))
+        self.assertEqual(s.public_url('https://example.org/paper?session=hidden#fragment'),'https://example.org/paper')
     def test_pubmed_identity_and_structured_abstract(self):
         body='Synthetic public abstract with no private data. '*5
         xml='<PubmedArticleSet><PubmedArticle><MedlineCitation><PMID>42949622</PMID><Article><ArticleTitle>Synthetic title</ArticleTitle><Abstract><AbstractText>'+body+'</AbstractText></Abstract></Article></MedlineCitation><PubmedData><ArticleIdList><ArticleId IdType="doi">10.1002/anie.3951000</ArticleId></ArticleIdList></PubmedData></PubmedArticle></PubmedArticleSet>'
@@ -72,12 +101,32 @@ class V2Tests(unittest.TestCase):
     def test_missing_evidence_is_null_not_low_relevance(self):
         papers=json.loads((r.ROOT/'papers.public.json').read_text())
         config=json.loads((r.ROOT/'sources_v2.public.json').read_text());calls=[]
+        config['P508'].pop('user_provided_abstract',None) # Exercise generic unavailable-source fallback.
         def missing(url):calls.append(url);raise OSError('synthetic offline source')
         _,evidence,ready=s.prepare(papers,config,get=missing)
         self.assertFalse(ready);self.assertEqual(len(calls),6)
         for key in ('P041','P267','P508'):
             self.assertEqual(evidence[key]['evidence_status'],'insufficient_evidence')
             self.assertIsNone(evidence[key]['relevance_score'])
+    def test_user_provided_abstract_is_verbatim_labeled_and_uses_no_rigor_get(self):
+        papers=json.loads((r.ROOT/'papers.public.json').read_text())
+        config=json.loads((r.ROOT/'sources_v2.public.json').read_text());calls=[]
+        def missing(url):calls.append(url);raise OSError('synthetic offline source')
+        completed,evidence,ready=s.prepare(papers,config,get=missing)
+        provided=config['P508']['user_provided_abstract']
+        self.assertEqual(next(p['abstract'] for p in completed if p['id']=='P508'),provided)
+        self.assertEqual(evidence['P508']['source']['kind'],'user_provided_abstract')
+        self.assertTrue(evidence['P508']['source']['not_independently_publisher_fetched'])
+        self.assertEqual(evidence['P508']['evidence_status'],'abstract_available')
+        self.assertFalse(ready);self.assertEqual(len(calls),3)
+        self.assertTrue(all(url not in calls for url in [item['url'] for item in config['P508']['routes']]))
+        self.assertNotIn(provided,json.dumps(evidence))
+    def test_invalid_user_provided_abstract_does_not_fallback_to_http(self):
+        paper={'id':'P508','title':'Synthetic title','abstract':''};calls=[]
+        config={'P508':{'user_provided_abstract':'too short','routes':[{'url':'https://example.org'}]}}
+        _,evidence,ready=s.prepare([paper],config,get=lambda url:calls.append(url))
+        self.assertFalse(ready);self.assertEqual(calls,[])
+        self.assertIsNone(evidence['P508']['relevance_score'])
     def test_failed_source_stage_never_calls_model_or_remote_budget(self):
         with tempfile.TemporaryDirectory() as path:
             private=Path(path)/'private';output=Path(path)/'out'
@@ -196,6 +245,7 @@ class V2Tests(unittest.TestCase):
                     self.assertNotIn('SYNTHETIC_FULL_ABSTRACT',file.read_text())
                     self.assertNotIn('Much of the water that matters',file.read_text())
                     self.assertNotIn('synthetic-test-key',file.read_text())
+                    self.assertNotIn('Electrocatalysis is central to electrified energy conversion technologies',file.read_text())
                 self.assertFalse(any(out.glob('*.request.json')))
             finally:
                 r.ROOT=old_root;v1.load_core=old_load;r.read_remote=old_read;r.put_remote=old_put

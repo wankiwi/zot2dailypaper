@@ -29,7 +29,10 @@
         "identifier": "10.1038/s44221-026-00734-6",
         "end_pattern": "^(Access options|Similar content)",
         "provenance": "primary_nature_exact_title_and_doi",
-        "license": "exclusive_rights_runtime_analysis_only"
+        "license": "exclusive_rights_runtime_analysis_only",
+        "publisher_suffixes": [
+          "Nature Water"
+        ]
       }
     ]
   },
@@ -59,7 +62,9 @@
         "provenance": "secondary_researchgate_exact_chemrxiv_v2_title_and_doi_not_primary",
         "license": "not_verified_runtime_only"
       }
-    ]
+    ],
+    "identity_reference": "https://www.jbatesgroup.com/publications; JACS DOI 10.1021/jacs.6c09028",
+    "user_provided_abstract": "Electrocatalysis is central to electrified energy conversion technologies, including the production of fuels and chemicals from renewable electricity. In recent years, atomistic modeling based on density functional theory (DFT) has become an indispensable tool for catalysis researchers because it can provide a molecular-level perspective into catalytic reactivity that is otherwise inaccessible to experimental measurements. Computational electrocatalysis model inputs are intended to capture fundamental understanding of the complex interfacial environment of the catalytic active site, but rely on practical approximations that can affect the reliability of insights gained from DFT. This Perspective outlines a framework for rigorous and reproducible integration of theory and experiment in heterogeneous electrocatalysis research. We discuss state-of-the-art computational methods and sources of error in model development and interpretation. We describe opportunities for validation of theoretical models and experimental interpretations as it pertains to the structure of active sites, reaction energetics, and microkinetic modeling. We provide examples to help computational researchers develop models that move beyond obtaining qualitative agreement with reactivity trends, and toward the development of rigorous mechanistic insights that can be leveraged to predict promising new catalysts or operating conditions. Rigor and reproducibility are enhanced when theory and experiment have multiple nodes of connection, which enhances the longevity and robustness of conclusions and insights about electrocatalytic reactivity."
   },
   "P932": {
     "existing_source": "https://arxiv.org/abs/2610.35965"
