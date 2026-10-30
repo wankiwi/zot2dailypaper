@@ -27,7 +27,7 @@ permissions:
   contents: read
 jobs:
   pilot:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/experiment/openai-shadow-20261029' && github.run_attempt == 1 && (inputs.experiment_mode == 'heldout' || inputs.experiment_mode == 'compare') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/experiment/openai-shadow-20261029' && github.run_attempt == 1 && (inputs.experiment_mode == 'heldout' || inputs.experiment_mode == 'compare' || inputs.experiment_mode == 'recover') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -73,7 +73,9 @@ jobs:
           TRANSFORMERS_VERBOSITY: error
         run: |
           umask 077
-          if [ "$EXPERIMENT_MODE" = compare ]; then
+          if [ "$EXPERIMENT_MODE" = recover ]; then
+            uv run --frozen python "$GITHUB_WORKSPACE/experiments/openai_shadow/comparison/recover.py" > "$RUNNER_TEMP/comparison-private-run.log" 2>&1
+          elif [ "$EXPERIMENT_MODE" = compare ]; then
             uv run --frozen python "$GITHUB_WORKSPACE/experiments/openai_shadow/comparison/experiment.py" > "$RUNNER_TEMP/comparison-private-run.log" 2>&1
           else
             uv run --frozen python "$GITHUB_WORKSPACE/experiments/openai_shadow/heldout/runner.py" > "$RUNNER_TEMP/heldout-private-run.log" 2>&1
@@ -85,7 +87,7 @@ jobs:
         run: |
           python3 - <<'PY'
           import json,os,pathlib
-          folder='comparison-public' if os.environ['EXPERIMENT_MODE']=='compare' else 'heldout-public'
+          folder='comparison-public' if os.environ['EXPERIMENT_MODE'] in ('compare','recover') else 'heldout-public'
           path=pathlib.Path(os.environ['RUNNER_TEMP'])/folder/'status.public.json'
           if path.exists():
               data=json.loads(path.read_text())

@@ -5,10 +5,14 @@ import json
 from pathlib import Path
 import logic as L
 
-def write_deliverables(envelope,private_key,output,protocol):
+def write_deliverables(envelope,private_key,output,protocol,original=None):
     result=L.prior.unseal(envelope,private_key,expected_experiment=L.ROUND,expected_protocol_sha256=L.CONTEXT_SHA)
     if result.get('protocol_sha256') and result['protocol_sha256']!=L.digest(L.validate_protocol(protocol)):
         raise L.Stop('decrypted_private_protocol_mismatch')
+    if result.get('recovery_id') and result.get('status')=='completed':
+        if original is None:raise L.Stop('local_original_results_required_for_frozen_pairing')
+        from recover import attach_original_pairing
+        result=attach_original_pairing(result,original)
     output.mkdir(mode=0o700,parents=True,exist_ok=True)
     hidden=output/'paired_results.local.json';L.adapter.write(hidden,result)
     rows=result.get('blind_rows',[])
@@ -35,8 +39,9 @@ def write_deliverables(envelope,private_key,output,protocol):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('encrypted','private-key','protocol','output'):parser.add_argument('--'+name,type=Path,required=True)
+    parser.add_argument('--original-results',type=Path)
     args=parser.parse_args()
-    summary=write_deliverables(json.loads(args.encrypted.read_text()),args.private_key.read_bytes(),args.output,json.loads(args.protocol.read_text()))
+    summary=write_deliverables(json.loads(args.encrypted.read_text()),args.private_key.read_bytes(),args.output,json.loads(args.protocol.read_text()),json.loads(args.original_results.read_text()) if args.original_results else None)
     print(json.dumps(summary,ensure_ascii=False))
 
 if __name__=='__main__':main()

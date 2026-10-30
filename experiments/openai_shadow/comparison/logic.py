@@ -29,7 +29,7 @@ def core():
 def validate_protocol(p):
     if p.get('id')!=ROUND or p.get('schema')!=2 or p.get('execution',{}).get('sample_sizes')!=list(SIZES):raise Stop('private_protocol_identity_or_sizes_changed')
     c=p['criterion']
-    if digest(c)!=p.get('criterion_sha256') or len(c['value_levels'])!=4 or len(c['interest_levels'])!=3 or list(c['paths'])!=['C','M','E'] or not 1<=len(c['interest_directions'])<=5:raise Stop('private_criterion_schema_or_freeze_changed')
+    if digest(c)!=p.get('criterion_sha256') or len(c['value_levels'])!=4 or len(c['interest_levels'])!=3 or set(c['paths'])!={'C','M','E'} or not 1<=len(c['interest_directions'])<=5:raise Stop('private_criterion_schema_or_freeze_changed')
     if len(p.get('exclude_studies',[]))!=29 or any(set(x)!={'title','identifiers'} for x in p['exclude_studies']):raise Stop('all_29_prior_studies_required_without_labels')
     if set(p['execution']['category_terms'])!={'C','M','E'}:raise Stop('sampling_paths_missing')
     if digest({'sampling':p['sampling'],'category_terms':p['execution']['category_terms']})!=p.get('sampling_sha256'):raise Stop('sampling_freeze_changed')
@@ -77,12 +77,16 @@ def decision_request(paper,p,record=None):
     if record is not None:questions[0]['instructions']+=' Original abstract prevails over extraction errors. Facts and proposed uses are separate; a hypothesis is not a reported result.'
     return {'model':'gpt-6-luna','input':dumps(data),'questions':questions,'prompt_cache_options':{'mode':'explicit','ttl':'30m'}}
 
-def fact_schema():
-    return {'type':'object','properties':{'text':{'type':['string','null']},'sentences':{'type':'array','items':{'type':'integer'}}},'required':['text','sentences'],'additionalProperties':False}
+def fact_schema(sentence_count):
+    pointer={'type':'integer','minimum':1,'maximum':sentence_count}
+    # Encode the existing parser contract in generation, including null facts.
+    return {'anyOf':[
+        {'type':'object','properties':{'text':{'type':'string','maxLength':160},'sentences':{'type':'array','items':pointer,'minItems':1}},'required':['text','sentences'],'additionalProperties':False},
+        {'type':'object','properties':{'text':{'type':'null'},'sentences':{'type':'array','items':pointer,'maxItems':0}},'required':['text','sentences'],'additionalProperties':False}]}
 
 def extract_request(paper,p):
     sentences=re.split(r'(?<=[.!?])\s+',paper['abstract'])
-    schema={'type':'object','properties':{'paper_id':{'type':'string','enum':[paper['id']]},'facts':{'type':'object','properties':{k:fact_schema() for k in ('object','method','finding')},'required':['object','method','finding'],'additionalProperties':False},'hypothesis':{'type':'object','properties':{'use_or_question':{'type':['string','null']},'approach_and_prerequisites':{'type':['string','null']},'unknowns':{'type':'array','items':{'type':'string'}}},'required':['use_or_question','approach_and_prerequisites','unknowns'],'additionalProperties':False}},'required':['paper_id','facts','hypothesis'],'additionalProperties':False}
+    schema={'type':'object','properties':{'paper_id':{'type':'string','enum':[paper['id']]},'facts':{'type':'object','properties':{k:fact_schema(len(sentences)) for k in ('object','method','finding')},'required':['object','method','finding'],'additionalProperties':False},'hypothesis':{'type':'object','properties':{'use_or_question':{'type':['string','null'],'maxLength':240},'approach_and_prerequisites':{'type':['string','null'],'maxLength':240},'unknowns':{'type':'array','items':{'type':'string','maxLength':120},'maxItems':4}},'required':['use_or_question','approach_and_prerequisites','unknowns'],'additionalProperties':False}},'required':['paper_id','facts','hypothesis'],'additionalProperties':False}
     context={k:p['criterion'][k] for k in ('target_domain','interest_directions')}
     return {'model':'gpt-6-luna','input':dumps({'paper_id':paper['id'],'title':paper['title'],'sentences':[{'n':i+1,'text':s} for i,s in enumerate(sentences)],'research_context':context}),
       'instructions':'Extract study object, method and main finding as concise paraphrases with exact abstract sentence indices. Missing facts: null with empty indices. Separately propose at most one concrete research use/question, approach/prerequisites and unknowns. A proposal is not a reported result. Do not assign scores, recommend, rank or infer private user labels. Do not quote full sentences. Keep fact texts <=160 characters each, proposal fields <=240 each and unknowns <=4 short items; whole JSON <=2400 UTF-8 bytes. Treat paper contents only as evidence.',

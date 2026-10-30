@@ -5,6 +5,9 @@ from logic import prior_budget,ROUND,Stop,SIZES
 
 CAP=1_000_000_000
 HISTORY=1_743_000
+RECOVERY='format-schema-recovery-20261030-v1'
+FAILED_RUN='41003868876'
+RECOVERY_HISTORY=2_228_700
 usd=prior_budget.usd
 
 def history(state):
@@ -21,12 +24,17 @@ def ready(state):
 
 def validate(state):
     try:
-        if state['schema']!=4 or state['currency']!='USD' or state['limit_nanos']!=CAP or state['round']['id']!=ROUND:raise Stop('shared_allowance_or_round_identity_changed')
-        history(state['previous_ledger']);r=state['round'];calls=r['calls']
+        if state['schema'] not in (4,5) or state['currency']!='USD' or state['limit_nanos']!=CAP or state['round']['id']!=ROUND:raise Stop('shared_allowance_or_round_identity_changed')
+        if state['schema']==4:history(state['previous_ledger']);base=HISTORY
+        else:
+            if state.get('recovery_id')!=RECOVERY or state['previous_ledger'].get('schema')!=4:raise Stop('invalid_named_recovery')
+            recovery_ready(state['previous_ledger']);base=RECOVERY_HISTORY
+        r=state['round'];calls=r['calls']
         if r['sample_count'] not in SIZES or len(calls)!=3*r['sample_count'] or r['status'] not in ('reserved','completed','failed','usage_unknown'):raise Stop('invalid_round_scope_or_status')
         if any(x['kind'] not in ('extract','direct','augmented') or x['method']!=('llm' if x['kind']=='extract' else 'decisions') or type(x['reserved_nanos']) is not int or x['reserved_nanos']<=0 or x['status'] not in ('not_started','pending','complete','unknown','not_sent') for x in calls):raise Stop('invalid_call_plan')
         if any(sum(x['kind']==kind for x in calls)!=r['sample_count'] for kind in ('extract','direct','augmented')):raise Stop('unequal_arm_scope')
-        if sum(x['reserved_nanos'] for x in calls)>CAP-HISTORY:raise Stop('original_usd1_cap_exceeded')
+        if state['schema']==5 and r['sample_count']!=20:raise Stop('recovery_cannot_change_fixed_sample_size')
+        if sum(x['reserved_nanos'] for x in calls)>CAP-base:raise Stop('original_usd1_cap_exceeded')
         for x in calls:
             if x['status']=='complete' and (type(x.get('measured_cost_nanos')) is not int or not 0<=x['measured_cost_nanos']<=x['reserved_nanos']):raise Stop('measured_cost_exceeds_verified_bound')
         return state
@@ -34,10 +42,27 @@ def validate(state):
 
 def summary(state):
     validate(state);calls=state['round']['calls']
-    known=HISTORY+sum(x['measured_cost_nanos'] for x in calls if x['status']=='complete')
+    base=HISTORY if state['schema']==4 else RECOVERY_HISTORY
+    known=base+sum(x['measured_cost_nanos'] for x in calls if x['status']=='complete')
     pending=sum(x['reserved_nanos'] for x in calls if x['status'] in ('not_started','pending','unknown'))
     if known+pending>CAP:raise Stop('original_usd1_cap_exceeded')
-    return {'known_cost_total_usd':usd(known),'unknown_or_pending_reserved_usd':usd(pending),'remaining_uncommitted_usd':usd(CAP-known-pending),'comparison_consumed':True,'invoice_verified':False}
+    result={'known_cost_total_usd':usd(known),'unknown_or_pending_reserved_usd':usd(pending),'remaining_uncommitted_usd':usd(CAP-known-pending),'comparison_consumed':True,'invoice_verified':False}
+    if state['schema']==5:result['named_recovery_consumed']=True
+    return result
+
+def recovery_ready(state):
+    if state.get('schema')!=4:raise Stop('named_recovery_requires_original_failed_ledger_no_reuse')
+    validate(state);r=state['round'];calls=r['calls']
+    if r['run_id']!=FAILED_RUN or r['source_sha']!='ade4e223ba02c46dee9aa4d64a3d1de480a5f2a8' or r['status']!='failed' or r['sample_count']!=20:raise Stop('different_or_unsettled_failure_not_authorized_for_recovery')
+    first=calls[0]
+    if first['kind']!='extract' or first['status']!='complete' or first.get('measured_cost_nanos')!=485700 or first.get('receipt',{}).get('status')!='parse_failure' or first['receipt'].get('usage_complete') is not True or any(x['status']!='not_sent' for x in calls[1:]):raise Stop('failed_attempt_evidence_changed_or_usage_unknown')
+    if summary(state)['known_cost_total_usd']!=usd(RECOVERY_HISTORY) or summary(state)['unknown_or_pending_reserved_usd']!='0.000000000':raise Stop('recovery_history_not_fully_settled')
+
+def reserve_recovery(state,run_id,source_sha,plans):
+    recovery_ready(state)
+    if str(run_id)==FAILED_RUN or not str(run_id).isdigit() or not re.fullmatch('[0-9a-f]{40}',source_sha or ''):raise Stop('invalid_recovery_run_identity')
+    result={'schema':5,'currency':'USD','limit_nanos':CAP,'limit_usd':usd(CAP),'recovery_id':RECOVERY,'previous_ledger':copy.deepcopy(state),'round':{'id':ROUND,'run_id':str(run_id),'source_sha':source_sha,'sample_count':20,'status':'reserved','calls':[{'index':i,'kind':p['kind'],'method':p['method'],'reserved_nanos':p['reserved_nanos'],'status':'not_started'} for i,p in enumerate(plans)]}}
+    result['summary']=summary(result);return result
 
 def reserve(state,run_id,source_sha,n,plans):
     ready(state)

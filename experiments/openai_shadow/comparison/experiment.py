@@ -37,7 +37,11 @@ def call(index,plan,request,paper,protocol,private,result,send=None):
     except Exception as error:
         fields={'status':'transport_failure_usage_unknown','usage_complete':False,'error_class':type(error).__name__}
     if response is not None:
-        fields=usage(method,response);fields.update(model_returned=response.get('model'),response_sha256=L.digest(c.sanitized_response(response,c.credential(os.environ))))
+        sanitized=c.sanitized_response(response,c.credential(os.environ))
+        fields=usage(method,response);fields.update(model_returned=response.get('model'),response_sha256=L.digest(sanitized))
+        # Result is encrypted before export. Preserve failed Responses output
+        # too: a hash and error class cannot support offline diagnosis/reparse.
+        if method=='llm':result.setdefault('sanitized_llm_responses',[]).append({'kind':plan['kind'],'paper_id':paper['id'],'response':sanitized})
         try:
             if not c.valid_model(response.get('model')):raise L.Stop('unexpected_model')
             if method=='llm':parsed=L.parse_record(response,paper)
@@ -47,6 +51,7 @@ def call(index,plan,request,paper,protocol,private,result,send=None):
             else:fields['status']='completed'
         except Exception as error:
             fields['status']='parse_failure';fields['error_class']=type(error).__name__
+            result.setdefault('validation_failures',[]).append({'kind':plan['kind'],'paper_id':paper['id'],'error_class':type(error).__name__,'reason':str(error),'response_status':response.get('status'),'incomplete_details':response.get('incomplete_details')})
     receipt=inner.finish(method,fields)
     result.setdefault('model_receipts',[]).append(dict(receipt,kind=plan['kind'],paper_id=paper['id']))
     state,sha=L.adapter.read_remote();updated=costs.finish(state,os.environ['GITHUB_RUN_ID'],index,receipt);L.adapter.put_remote(updated,sha)
@@ -102,19 +107,19 @@ def execute(private,result,send=None):
     finally:
         state,sha=L.adapter.read_remote();closed=costs.close(state,os.environ['GITHUB_RUN_ID'],success);L.adapter.put_remote(closed,sha);result['cumulative_budget']=closed['summary']
 
-def main():
+def main(execute_fn=execute,historical_usd='0.001743000'):
     temp=Path(os.environ['RUNNER_TEMP']);private=temp/'comparison-private';public=temp/'comparison-public'
     private.mkdir(mode=0o700,exist_ok=True);public.mkdir(mode=0o700,exist_ok=True)
     result={'experiment':L.ROUND,'run_id':os.environ.get('GITHUB_RUN_ID'),'source_commit':os.environ.get('GITHUB_SHA'),'phase':'preflight','status':'blocked_before_paid','human_labels_received':False}
-    safe={'experiment':L.ROUND,'historical_estimated_usd':'0.001743000'}
-    try:execute(private,result)
+    safe={'experiment':L.ROUND,'historical_estimated_usd':historical_usd}
+    try:execute_fn(private,result)
     except Exception as error:
         if result['phase']=='paid_comparison':result['status']='failed_after_reservation'
         result['error_class']=type(error).__name__
         if isinstance(error,L.Stop) or (type(error).__name__=='Blocked' and type(error).__module__.startswith('heldout_client_')):result['reason']=str(error)
     finally:
         try:
-            state,_=L.adapter.read_remote();result['cumulative_budget']=costs.summary(state) if state.get('schema')==4 else state['summary']
+            state,_=L.adapter.read_remote();result['cumulative_budget']=costs.summary(state) if state.get('schema') in (4,5) else state['summary']
         except Exception:result['accounting_readable']=False
         recipient=(L.ROOT.parent/'heldout/recipient.public.pem').read_bytes()
         L.adapter.write(public/'result.sealed.json',L.prior.seal(result,recipient,experiment_id=L.ROUND,protocol_sha256=L.CONTEXT_SHA))
@@ -122,5 +127,6 @@ def main():
         safe.update(sample_count=len(result.get('candidates',[])),baseline_ready='baseline' in result)
         L.adapter.write(public/'status.public.json',safe)
         print(L.dumps(safe))
+    return 0 if result.get('status')=='completed' else 1
 
-if __name__=='__main__':main()
+if __name__=='__main__':sys.exit(main())

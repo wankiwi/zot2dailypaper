@@ -75,6 +75,32 @@ class Tests(unittest.TestCase):
         with self.assertRaises(L.Stop):L.parse_record(wrap(bad),paper)
         bad=copy.deepcopy(r);bad['facts']['method']['text']=None
         with self.assertRaisesRegex(L.Stop,'missing_fact_cannot_claim_evidence'):L.parse_record(wrap(bad),paper)
+    def test_generation_schema_encodes_existing_format_and_pointer_bounds(self):
+        paper=rows(1)[0];schema=L.extract_request(paper,protocol())['text']['format']['schema']
+        facts=schema['properties']['facts']['properties']
+        for fact in facts.values():
+            present,missing=fact['anyOf']
+            self.assertEqual(present['properties']['text']['maxLength'],160)
+            self.assertEqual(present['properties']['sentences']['minItems'],1)
+            pointer=present['properties']['sentences']['items'];self.assertEqual(pointer['minimum'],1);self.assertGreater(pointer['maximum'],0)
+            self.assertEqual(missing['properties']['text']['type'],'null');self.assertEqual(missing['properties']['sentences']['maxItems'],0)
+        hypothesis=schema['properties']['hypothesis']['properties']
+        self.assertEqual(hypothesis['use_or_question']['maxLength'],240);self.assertEqual(hypothesis['unknowns']['maxItems'],4);self.assertEqual(hypothesis['unknowns']['items']['maxLength'],120)
+    def test_failed_record_retains_response_and_precise_diagnostic_only_privately(self):
+        p=protocol();paper=rows(1)[0];plans=L.bound_plans(rows(24),p);remote={'state':costs.reserve(prior_ledger(),'777','c'*40,24,plans),'sha':'a'*40}
+        bad=record(paper);bad['facts']['method']['text']='x'*161
+        response={'model':'gpt-6-luna','status':'completed','usage':{'input_tokens':200,'input_tokens_details':{'cached_tokens':0},'output_tokens':200,'output_tokens_details':{'reasoning_tokens':50},'total_tokens':400},'output':[{'type':'message','content':[{'type':'output_text','text':json.dumps(bad)}]}]}
+        result={};sent=[]
+        def read():return copy.deepcopy(remote['state']),remote['sha']
+        def put(state,sha):self.assertEqual(sha,remote['sha']);remote['state']=copy.deepcopy(state)
+        def send(*args):sent.append(1);return copy.deepcopy(response)
+        with tempfile.TemporaryDirectory() as tmp,mock.patch.dict(os.environ,ENV),mock.patch.object(L.adapter,'read_remote',read),mock.patch.object(L.adapter,'put_remote',put):
+            with self.assertRaisesRegex(L.Stop,'paid_request_failed_no_retry'):E.call(0,plans[0],L.extract_request(paper,p),paper,p,Path(tmp),result,send=send)
+        self.assertEqual(sent,[1]);self.assertEqual(result['validation_failures'][0]['reason'],'unsupported_or_overlong_fact')
+        self.assertEqual(result['sanitized_llm_responses'][0]['response']['output'],response['output'])
+        self.assertEqual(remote['state']['round']['calls'][0]['receipt']['status'],'parse_failure')
+        self.assertEqual(remote['state']['round']['calls'][0]['status'],'complete')
+        public=L.dumps(remote['state']);self.assertNotIn('unsupported_or_overlong_fact',public);self.assertNotIn('x'*161,public)
     def test_same_paper_and_rules_only_record_differs_between_arms(self):
         p=protocol();paper=rows(1)[0];paper['corpus']='PRIVATE_ZOTERO_SENTINEL';paper['label']='HUMAN_LABEL_SENTINEL'
         direct=L.decision_request(paper,p);enh=L.decision_request(paper,p,record(paper));a=json.loads(direct['input']);b=json.loads(enh['input'])

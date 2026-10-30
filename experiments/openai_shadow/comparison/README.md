@@ -59,8 +59,10 @@ One manual run performs offline guards and source/baseline/price/budget prefligh
 then paid requests only when all gates pass. Do not rerun a failed/partial paid
 run: inspect cost receipts first. The price snapshot must be verified on the UTC
 run date. Result artifact `compare-sealed-RUN_ID` contains only encrypted results
-and a safe status/cost summary. No raw abstracts, criteria, scores, rankings,
-mapping, private configuration or plaintext logs are uploaded.
+and a safe status/cost summary. Sanitized model responses and precise validation
+diagnostics are retained inside the encrypted payload, including failed LLM
+outputs, to permit offline diagnosis. Public fields and logs contain no raw
+abstracts, criteria, scores, rankings, mapping or private configuration.
 
 Decrypt locally with `decrypt.py --encrypted ... --private-key ... --protocol ...
 --output ...`. The existing recipient private key stays local. The blind CSV has
@@ -75,3 +77,33 @@ Official interface and current price references:
 [Decisions](https://developers.openai.com/api/docs/guides/decisions),
 [Responses structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs),
 [pricing](https://developers.openai.com/api/docs/pricing).
+
+## One controlled format recovery
+
+Run `41003868876` settled one failed extraction at USD0.0004857. Its original
+response and precise validation error were not retained, so the exact validation
+failure cannot be reconstructed. Encoding the existing length, null-fact and
+sentence-index rules in the generation schema and retaining encrypted diagnostics
+does not establish that the original underlying failure is known or fixed.
+
+The single named recovery is `format-schema-recovery-20261030-v1`. It preserves
+the original failed ledger under schema5 and includes cumulative USD0.0022287
+before any recovery request. It allows at most 60 new requests within the original
+USD1 cap; no automatic repeated recovery or unknown-usage retry is permitted.
+
+Set the existing experiment-only `SHADOW_PROTOCOL_V2` variable to the complete
+private recovery input, which wraps the unchanged protocol and the fixed public
+paper metadata/hashes. It contains no baseline scores or blind mapping. Choose
+**recover** in Test on the same experimental branch. The normal guarded run first
+refetches only the same 20 DOI records from their original Crossref/bioRxiv sources.
+Every title, DOI, abstract byte count and SHA256 must match before any cost claim.
+Missing metadata or drift stops without substituting papers or shrinking the set.
+The original output did not retain complete abstracts, so this exact-hash refetch
+is necessary. No fresh Zotero retrieval or Jina recomputation occurs in recovery.
+
+The artifact is `recover-sealed-RUN_ID`. After local decryption, pass the original
+failed run's privately retained paired JSON to `decrypt.py --original-results ...`.
+The decoder verifies the fixed candidates, original Jina score/order hash and
+original blind-order hash, then restores their exact pairing. The original baseline
+scores, source/direction metadata and blind mapping remain local throughout the
+job. Only the resulting neutral CSV is a human evaluation deliverable.
