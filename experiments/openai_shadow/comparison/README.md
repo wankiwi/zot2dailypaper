@@ -107,3 +107,12 @@ The decoder verifies the fixed candidates, original Jina score/order hash and
 original blind-order hash, then restores their exact pairing. The original baseline
 scores, source/direction metadata and blind mapping remain local throughout the
 job. Only the resulting neutral CSV is a human evaluation deliverable.
+
+The private recovery input may additionally contain `verified_public_abstracts`:
+text already recovered from a public original source. Each supplied text must
+match the frozen paper's exact byte count and SHA256; it cannot replace a changed
+abstract. Original journal retrieval merges Crossref and publisher RSS, so a
+Crossref-only lookup can lack text present in the original combined source.
+Verified source inputs, including partial preflight successes, are preserved only
+inside encrypted results for reuse. Neither supplied text nor the private input
+belongs in public git, logs or plaintext artifacts.

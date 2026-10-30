@@ -53,6 +53,29 @@ class RecoveryTests(unittest.TestCase):
         for field,value in [('DOI','10.4321/different'),('title',['Different source title']),('abstract','A changed abstract.')]:
             bad=copy.deepcopy(raw);bad['message'][field]=value
             with self.assertRaises(L.Stop):S.resolve(row,lambda url:bad)
+    def test_verified_fixed_abstract_avoids_refetch_and_still_requires_exact_hash(self):
+        p,rows,old,original,doc,get=fixture();row=rows[2]
+        entry={'text':row['abstract'],'source_url':'https://publisher.example.test/journal/','source_kind':'synthetic_publisher_hash_verified'}
+        doc['recovery']['verified_public_abstracts']={row['id']:entry};R.validate_input(doc)
+        called=[]
+        def guarded(url):
+            called.append(url)
+            self.assertNotIn(row['canonical_id'],unquote(url))
+            return get(url)
+        resolved,failures=S.resolve_all(doc['recovery']['candidates'],guarded,doc['recovery']['verified_public_abstracts'])
+        self.assertEqual(len(resolved),20);self.assertEqual(len(called),19);self.assertEqual(failures,[])
+        bad=copy.deepcopy(doc);bad['recovery']['verified_public_abstracts'][row['id']]['text']+=' changed'
+        with self.assertRaisesRegex(L.Stop,'original_hash'):R.validate_input(bad)
+        self.assertEqual(doc['recovery']['candidate_snapshot_sha256'],L.digest(doc['recovery']['candidates']))
+    def test_partial_preflight_retains_only_verified_public_inputs_in_private_result(self):
+        p,rows,old,original,doc,get=fixture();env=dict(F.ENV,GITHUB_RUN_ID='888',GITHUB_SHA='d'*40,SHADOW_PROTOCOL_V2=L.dumps(doc))
+        def one_missing(url):
+            if rows[2]['canonical_id'] in unquote(url):return {'message':{'DOI':rows[2]['canonical_id'],'title':[rows[2]['title']]}}
+            return get(url)
+        result={}
+        with tempfile.TemporaryDirectory() as tmp,mock.patch.dict(os.environ,env),mock.patch.object(E,'price_guard',return_value={}),mock.patch.object(L.adapter,'read_remote',return_value=(old,'a'*40)),mock.patch.object(L.adapter,'put_remote') as put:
+            with self.assertRaisesRegex(L.Stop,'frozen_abstract_refetch_failed'):R.execute(Path(tmp),result,get=one_missing)
+        self.assertEqual(len(result['verified_public_inputs']),19);self.assertEqual(len(result['source_preflight_failures']),1);put.assert_not_called()
     def test_named_recovery_preserves_failed_cost_and_prevents_second_recovery(self):
         p,rows,old,original,doc,get=fixture();plans=L.bound_plans(rows,p)
         state=costs.reserve_recovery(old,'888','d'*40,plans)

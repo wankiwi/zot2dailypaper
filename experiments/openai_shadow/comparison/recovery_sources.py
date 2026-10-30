@@ -34,6 +34,13 @@ def source_doi(row):
     if L.prior.canonical(doi)!=row['canonical_id'] or not re.fullmatch(r'10\.[0-9]{4,9}/[^\s?#]+',doi):raise L.Stop('original_source_doi_mismatch')
     return doi
 
+def fixed_input(row,supplied):
+    if not isinstance(supplied,dict) or set(supplied)!={'text','source_url','source_kind'} or not isinstance(supplied['text'],str):raise L.Stop('fixed_public_abstract_shape_invalid')
+    text=supplied['text'];url=urlsplit(supplied['source_url'])
+    if url.scheme!='https' or not url.hostname or url.username or url.password or not isinstance(supplied['source_kind'],str):raise L.Stop('fixed_public_abstract_provenance_invalid')
+    if len(text.encode())!=row['abstract_bytes'] or L.prior.text_sha(text)!=row['abstract_sha256']:raise L.Stop('supplied_public_abstract_differs_from_original_hash')
+    return dict(row,abstract=text,recovery_source_url=supplied['source_url'])
+
 def resolve(row,get=fetch):
     from zot2dailypaper.abstracts import clean_abstract
     from zot2dailypaper.identity import title_key
@@ -56,10 +63,11 @@ def resolve(row,get=fetch):
         return dict(row,abstract=abstract,recovery_source_url=url)
     raise L.Stop('original_abstract_or_title_drift_no_replacement')
 
-def resolve_all(rows,get=fetch):
+def resolve_all(rows,get=fetch,supplied=None):
+    supplied=supplied or {}
     resolved=[];failures=[]
     for row in rows:
-        try:resolved.append(resolve(row,get))
+        try:resolved.append(fixed_input(row,supplied[row['id']]) if row['id'] in supplied else resolve(row,get))
         except Exception as error:
             reason=re.sub(r'(?<=://)[^/@\s]+@','[redacted]@',str(error))[:600]
             failures.append({'paper_id':row['id'],'error_class':type(error).__name__,'reason':reason,'http_status':getattr(error,'code',None)})

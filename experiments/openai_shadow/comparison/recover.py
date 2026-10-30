@@ -15,11 +15,15 @@ def project_candidates(rows):return [{k:x[k] for k in CANDIDATE_KEYS} for x in r
 def validate_input(doc):
     if set(doc)!={'protocol','recovery'}:raise L.Stop('recovery_private_input_wrapper_invalid')
     p=L.validate_protocol(doc['protocol']);s=doc['recovery']
-    if set(s)!=SNAPSHOT_KEYS or s['schema']!=1 or s['id']!=costs.RECOVERY or s['source_run_id']!=costs.FAILED_RUN or s['source_commit']!='ade4e223ba02c46dee9aa4d64a3d1de480a5f2a8' or s['protocol_sha256']!=L.digest(p):raise L.Stop('recovery_snapshot_identity_changed')
+    if set(s)-{'verified_public_abstracts'}!=SNAPSHOT_KEYS or s['schema']!=1 or s['id']!=costs.RECOVERY or s['source_run_id']!=costs.FAILED_RUN or s['source_commit']!='ade4e223ba02c46dee9aa4d64a3d1de480a5f2a8' or s['protocol_sha256']!=L.digest(p):raise L.Stop('recovery_snapshot_identity_changed')
     rows=s['candidates']
     if len(rows)!=20 or any(set(x)!=set(CANDIDATE_KEYS) for x in rows) or [x['id'] for x in rows]!=[f'T{i:03d}' for i in range(1,21)] or len({x['canonical_id'] for x in rows})!=20 or L.digest(rows)!=s['candidate_snapshot_sha256']:raise L.Stop('recovery_fixed_candidates_changed')
     if any(not 150<=x['abstract_bytes']<=12000 for x in rows):raise L.Stop('recovery_full_abstract_evidence_missing')
     if s['baseline_reference'].get('source_run_id')!=costs.FAILED_RUN or not s['baseline_reference'].get('snapshot_sha256'):raise L.Stop('original_real_baseline_reference_missing')
+    supplied=s.get('verified_public_abstracts',{})
+    if not isinstance(supplied,dict) or set(supplied)-set(x['id'] for x in rows):raise L.Stop('supplied_abstract_outside_fixed_candidates')
+    for row in rows:
+        if row['id'] in supplied:sources.fixed_input(row,supplied[row['id']])
     return p,s
 
 def execute(private,result,send=None,get=sources.fetch):
@@ -29,8 +33,11 @@ def execute(private,result,send=None,get=sources.fetch):
     if L.digest(state)!=s['ledger_sha256']:raise L.Stop('settled_ledger_differs_from_verified_recovery_input')
     L.core().credential(os.environ)
     result.update(protocol_sha256=L.digest(p),private_protocol=p,recovery_id=costs.RECOVERY,recovery_source=s,baseline=s['baseline_reference'],candidates=s['candidates'],phase='fixed_sources_preflight',source_preflight_failures=[])
-    rows,failures=sources.resolve_all(s['candidates'],get)
+    rows,failures=sources.resolve_all(s['candidates'],get,s['verified_public_abstracts'] if 'verified_public_abstracts' in s else {})
     result['source_preflight_failures']=failures
+    # Public source text is retained only inside the encrypted result. It can
+    # then be reused after local verification rather than fetched repeatedly.
+    result['verified_public_inputs']=[{k:x[k] for k in ('id','title','abstract','abstract_sha256','recovery_source_url')} for x in rows]
     if failures or len(rows)!=20:raise L.Stop('frozen_abstract_refetch_failed_or_drifted_before_paid')
     result['source_preflight']={'matched_count':20,'all_original_title_and_abstract_hashes_match':True,'retrievals':[{'paper_id':x['id'],'url':x['recovery_source_url'],'abstract_sha256':L.prior.text_sha(x['abstract'])} for x in rows]}
     plans=L.bound_plans(rows,p)
