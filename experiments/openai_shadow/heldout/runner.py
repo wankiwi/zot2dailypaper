@@ -71,7 +71,7 @@ def load_baseline(private):
               'experiment_settings':OmegaConf.to_container(config.reranker.experiments,resolve=True)}
     return executor,corpus,profile,evidence
 
-def retrieve_and_rank(executor,corpus,profile,plan,development,report=None):
+def retrieve_and_rank(executor,corpus,profile,plan,development,report=None,selector=None):
     from zot2dailypaper.abstracts import clean_abstract
     from zot2dailypaper.identity import deduplicate,paper_dois,paper_doi,title_key
     from zot2dailypaper.selection import is_cover_title
@@ -111,7 +111,7 @@ def retrieve_and_rank(executor,corpus,profile,plan,development,report=None):
     for i,p in enumerate(rows):
         p['baseline_score']=float(p['paper'].score);p['direction']=int(np.argmax(similarities[i]))
         p['keyword_cosine']=float(similarities[i,p['direction']])
-    chosen,sampling=select(rows)
+    chosen,sampling=(selector or select)(rows)
     pool_hash=digest([{'id':p['canonical_id'],'abstract_sha256':text_sha(p['abstract']),'source':p['source']} for p in rows])
     chosen=sorted(chosen,key=lambda p:p['canonical_id'])
     for i,p in enumerate(chosen,1):p['id']=f'H{i:03d}'

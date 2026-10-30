@@ -3,9 +3,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: tests = sources only (no API secret); llm = one authorized cumulative v2 score
+        description: tests = five-paper preflight; llm = completed v2; heldout = completed pilot; compare = new paired pilot
         type: choice
-        options: [tests, llm, heldout]
+        options: [tests, llm, heldout, compare]
         default: tests
       collection_name_sha256:
         description: Unused compatibility input; leave empty
@@ -81,6 +81,22 @@ jobs:
     uses: ./.github/workflows/heldout-encrypted.yml
     secrets:
       private_configuration: ${{ vars.CUSTOM_CONFIG }}
+      ZOTERO_ID: ${{ secrets.ZOTERO_ID }}
+      ZOTERO_KEY: ${{ secrets.ZOTERO_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENALEX_API_KEY: ${{ secrets.OPENALEX_API_KEY }}
+      OPENREVIEW_USERNAME: ${{ secrets.OPENREVIEW_USERNAME }}
+      OPENREVIEW_PASSWORD: ${{ secrets.OPENREVIEW_PASSWORD }}
+  paired-comparison:
+    if: ${{ inputs.mode == 'compare' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/experiment/openai-shadow-20261029' && github.run_attempt == 1 }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/heldout-encrypted.yml
+    with:
+      experiment_mode: compare
+    secrets:
+      private_configuration: ${{ vars.CUSTOM_CONFIG }}
+      private_protocol: ${{ vars.SHADOW_PROTOCOL_V2 }}
       ZOTERO_ID: ${{ secrets.ZOTERO_ID }}
       ZOTERO_KEY: ${{ secrets.ZOTERO_KEY }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

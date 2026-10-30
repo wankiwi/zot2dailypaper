@@ -1,6 +1,7 @@
 """Synthetic tests only: crypto, sampling, payload privacy and shared accounting."""
 import base64
 import copy
+from datetime import datetime,timezone
 import importlib.util
 import json
 import os
@@ -12,6 +13,11 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 import common as c
 import pilot_budget as b
+
+class PricingFixtureDate(datetime):
+    @classmethod
+    def now(cls,tz=None):
+        return datetime.fromisoformat(json.loads((c.ROOT.parent/'pricing.public.json').read_text())['verified_on']).replace(tzinfo=timezone.utc)
 
 def history():
     old=b.previous
@@ -157,7 +163,7 @@ class Tests(unittest.TestCase):
                 return {'model':client.MODEL,'usage':{'input_tokens':1000,'input_tokens_details':{'cached_tokens':0,'cache_write_tokens':0},'output_tokens':0,'output_tokens_details':{'reasoning_tokens':0},'total_tokens':1000},'answers':[{'type':'score','name':q['name'],'score':1.5,'confidence':.5,'probabilities':[{'value':i,'label':str(i),'probability':.25} for i in range(4)]} for q in request['questions']]}
             client.transport=transport;return client
         env={'GITHUB_REPOSITORY':'wankiwi/zot2dailypaper','GITHUB_REF':'refs/heads/experiment/openai-shadow-20261029','GITHUB_EVENT_NAME':'workflow_dispatch','GITHUB_RUN_ATTEMPT':'1','GITHUB_WORKFLOW':'Test','GITHUB_RUN_ID':'123','GITHUB_SHA':'c'*40,'OPENAI_API_KEY':'synthetic_key','OPENAI_API_KEY_ISSUER':'https://api.openai.com','OPENAI_API_BASE':'https://api.openai.com/v1','OPENAI_BASE_URL':''}
-        with tempfile.TemporaryDirectory() as temp,mock.patch.dict(os.environ,env),mock.patch.object(r,'read_remote',read),mock.patch.object(r,'put_remote',put),mock.patch.object(r,'new_core',factory),mock.patch.object(r,'load_baseline',return_value=(object(),['ZOTERO_CORPUS_SENTINEL'],object(),{'profile_settings_sha256':'f'*64})),mock.patch.object(r,'retrieve_and_rank',return_value=(rows,{'eligible_count':72,'candidate_ids':[p['canonical_id'] for p in rows]})):
+        with tempfile.TemporaryDirectory() as temp,mock.patch.dict(os.environ,env),mock.patch.object(r,'datetime',PricingFixtureDate),mock.patch.object(r,'read_remote',read),mock.patch.object(r,'put_remote',put),mock.patch.object(r,'new_core',factory),mock.patch.object(r,'load_baseline',return_value=(object(),['ZOTERO_CORPUS_SENTINEL'],object(),{'profile_settings_sha256':'f'*64})),mock.patch.object(r,'retrieve_and_rank',return_value=(rows,{'eligible_count':72,'candidate_ids':[p['canonical_id'] for p in rows]})):
             result={'status':'blocked_before_model'};r.execute(Path(temp),result)
             self.assertEqual(result['status'],'completed');self.assertEqual(result['api_requests_started'],6)
             self.assertEqual(len(result['decisions_scores']),24)
@@ -181,7 +187,7 @@ class Tests(unittest.TestCase):
     def test_source_gate_failure_never_claims_or_calls(self):
         spec=importlib.util.spec_from_file_location('heldout_gate_test',c.ROOT/'runner.py');r=importlib.util.module_from_spec(spec);spec.loader.exec_module(r)
         env={'GITHUB_REPOSITORY':'wankiwi/zot2dailypaper','GITHUB_REF':'refs/heads/experiment/openai-shadow-20261029','GITHUB_EVENT_NAME':'workflow_dispatch','GITHUB_RUN_ATTEMPT':'1','GITHUB_WORKFLOW':'Test','GITHUB_RUN_ID':'123','GITHUB_SHA':'c'*40,'OPENAI_API_KEY':'synthetic_key','OPENAI_API_KEY_ISSUER':'https://api.openai.com','OPENAI_API_BASE':'https://api.openai.com/v1','OPENAI_BASE_URL':''}
-        with tempfile.TemporaryDirectory() as temp,mock.patch.dict(os.environ,env),mock.patch.object(r,'read_remote',return_value=(history(),'a'*40)),mock.patch.object(r,'put_remote') as put,mock.patch.object(r,'load_baseline',side_effect=c.Stop('synthetic_preflight_failure')):
+        with tempfile.TemporaryDirectory() as temp,mock.patch.dict(os.environ,env),mock.patch.object(r,'datetime',PricingFixtureDate),mock.patch.object(r,'read_remote',return_value=(history(),'a'*40)),mock.patch.object(r,'put_remote') as put,mock.patch.object(r,'load_baseline',side_effect=c.Stop('synthetic_preflight_failure')):
             with self.assertRaisesRegex(c.Stop,'synthetic_preflight_failure'):r.execute(Path(temp),{})
             put.assert_not_called()
     @unittest.skipUnless(importlib.util.find_spec('omegaconf'),'production dependency test runs in the workflow environment')

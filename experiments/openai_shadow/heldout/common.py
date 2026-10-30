@@ -146,24 +146,24 @@ def metrics(scores,labels,k=10):
     ideal=dcg(sorted(labels.values(),reverse=True)[:k])
     return {'precision_at_10':sum(labels[key]>=2 for key in order)/k,'ndcg_at_10':dcg([labels[key] for key in order])/ideal if ideal else None,'label_count':len(labels)}
 
-def seal(value,public_pem):
+def seal(value,public_pem,*,experiment_id=PLAN_ID,protocol_sha256=PLAN_SHA):
     from cryptography.hazmat.primitives import hashes,serialization
     from cryptography.hazmat.primitives.asymmetric import padding,rsa
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     recipient=serialization.load_pem_public_key(public_pem)
     if not isinstance(recipient,rsa.RSAPublicKey) or recipient.key_size<3072:raise Stop('recipient_key_not_approved_strength')
-    header={'schema':1,'algorithm':'RSA-OAEP-SHA256+A256GCM','experiment':PLAN_ID,'protocol_sha256':PLAN_SHA,'recipient_sha256':hashlib.sha256(public_pem).hexdigest()}
+    header={'schema':1,'algorithm':'RSA-OAEP-SHA256+A256GCM','experiment':experiment_id,'protocol_sha256':protocol_sha256,'recipient_sha256':hashlib.sha256(public_pem).hexdigest()}
     aad=dumps(header).encode();key=AESGCM.generate_key(bit_length=256);nonce=secrets.token_bytes(12)
     wrapped=recipient.encrypt(key,padding.OAEP(mgf=padding.MGF1(hashes.SHA256()),algorithm=hashes.SHA256(),label=aad))
     ciphertext=AESGCM(key).encrypt(nonce,dumps(value).encode(),aad)
     return dict(header,wrapped_key=base64.b64encode(wrapped).decode(),nonce=base64.b64encode(nonce).decode(),ciphertext=base64.b64encode(ciphertext).decode())
 
-def unseal(envelope,private_pem):
+def unseal(envelope,private_pem,*,expected_experiment=PLAN_ID,expected_protocol_sha256=PLAN_SHA):
     from cryptography.hazmat.primitives import hashes,serialization
     from cryptography.hazmat.primitives.asymmetric import padding
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     header={k:v for k,v in envelope.items() if k not in ('wrapped_key','nonce','ciphertext')}
-    if set(header)!={'schema','algorithm','experiment','protocol_sha256','recipient_sha256'} or header['schema']!=1 or header['algorithm']!='RSA-OAEP-SHA256+A256GCM' or header['experiment']!=PLAN_ID or header['protocol_sha256']!=PLAN_SHA:raise Stop('invalid_encrypted_envelope')
+    if set(header)!={'schema','algorithm','experiment','protocol_sha256','recipient_sha256'} or header['schema']!=1 or header['algorithm']!='RSA-OAEP-SHA256+A256GCM' or header['experiment']!=expected_experiment or header['protocol_sha256']!=expected_protocol_sha256:raise Stop('invalid_encrypted_envelope')
     aad=dumps(header).encode();private=serialization.load_pem_private_key(private_pem,password=None)
     public=private.public_key().public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo)
     if hashlib.sha256(public).hexdigest()!=header['recipient_sha256']:raise Stop('wrong_recipient')
