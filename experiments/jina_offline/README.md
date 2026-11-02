@@ -1,67 +1,145 @@
-# One isolated local Jina capture
+# Isolated full-pool Jina evaluation (review only)
 
-This experimental branch changes only this generic driver and its manual Test
-workflow. It does not modify the production baseline, daily schedule, email,
-delivery history, variables or shared embedding cache.
+This branch-local experiment captures an immutable candidate snapshot and compares
+A (the current multi-interest profile), B (only title+abstract input for candidates
+and references), and C (the previously frozen independent-method/phenomenon lanes
+plus B). C descriptions, lane count, RRF weights, depth and tie handling are fixed
+before new labels. No model migration, paid inference, email, state write or
+production cache sharing is performed.
 
-The baseline is checked out separately at immutable source commit
-339d0185fff0f67e7726eeb162462652e8669a38. The history branch is read-only. Existing
-read credentials supply Zotero and configured public-paper sources. A transient
-**data Secret**, JINA_OFFLINE_INPUT, is required for the private frozen protocol,
-credential-free runtime overrides, ranking projection and previous-study
-exclusions. It is not an API credential. It must be explicitly authorized,
-created by the operator before the single run and removed by that operator after
-retrieval. It is not provisioned or read back by this workflow. No private
-protocol values are committed here or passed through public dispatch inputs.
+## Complete inputs and rankings
 
-Only workflow_dispatch mode=jina_offline is accepted, only on the named experiment
-branch. The job has contents:read, a distinct concurrency group, a 45-minute
-timeout and no production cache restore/save. It never invokes Executor.run,
-_recommend, delivery, worker sync, remote embeddings or any LLM.
+The production checkout is pinned to source commit in `source_pin.json`. The
+ranking config, actual post-filter Zotero text, recovered candidate text, public
+model revision/runtime/artifact hashes and read-only history all enter the input
+manifest. A must reproduce every score, direction, stable full position and quota
+selection against the unchanged original local scorer; checking only top10 is
+insufficient. The actual Zotero records and reference vectors never leave the
+private job directory. Reference assignment changes between A and B are reported
+as aggregate transitions and hashes, without reference identifiers or text.
 
-All process output is suppressed. The sole uploaded path is an authenticated
-RSA-OAEP-SHA256 + AES-256-GCM envelope addressed to the supplied public recipient
-key, using the previously tested envelope format. The private key remains with
-the operator. Public artifacts therefore contain ciphertext, not plaintext
-personalized scores, mappings or new abstracts.
+Two pools are explicit. `production_full_pool_audit` preserves every captured
+production candidate and full A replay, plus B/C audit records. Separately,
+`validation_common_full_pool` excludes the frozen exposed-family list, uncertain
+identity/date/version records and the protocol's information-ineligible records
+**before** any validation scoring or quota/random selection. Its true heads are
+heads of the unexposed eligible pool; they are never called unfiltered production
+heads. Eligibility uses metadata only, with no labels or score-based refilling.
+Every exclusion reason, count and membership hash is retained. Missing abstracts
+and their original production ranks remain in the production audit; restricting
+validation to complete information is an explicit scope limitation, not a claim
+of improvement over all production inputs.
 
-The corpus is fetched and used only inside the ephemeral runner. The export guard
-rejects raw corpus/config/history/vector/path keys. Only hashes, aggregate
-support, public candidate metadata and comparison outputs are sealed. Temporary
-input JSON, local private vector/model caches and runtime config are removed;
-runner memory disappears with the job. Ciphertext artifact retention is one day.
-Do not assume this deletes GitHub's own retained logs or an operator's separately
-saved Library deliverable. Logs contain no user text or rankings.
+A/B/C are saved on the exact same complete qualified validation pool: every score,
+matched profile direction, support, stable model rank, quota position, random
+position and exclusion disposition is retained. C ranking scores and each lane's
+contribution are explicit; its profile eligibility still uses B's production
+minimum-score gate. C's direction fields refer to B, not a fabricated new profile.
+The complete expanded union, when successfully retrieved, has its own A/B/C
+controls and separate blind plan. Common-pool reranking and source expansion are
+never combined into one effect estimate.
 
-A new real A baseline is captured and checked with all scores, directions,
-ordering and selection membership; lost historical run inputs are not recreated.
-A/B share identical public candidate and actual Zotero information. B only adds
-titles. The private frozen protocol controls separate C_fixed/C_expanded results,
-old-family exclusions and blind-pool selection. Missing or inconsistent inputs
-seal a blocked result; a green workflow badge alone is not evidence of completed
-evaluation. Source coverage can remain incomplete and must be reported.
+## Dates, exposed families and source failures
 
-Expanded arXiv retrieval writes the effective preprint_interests.arxiv.categories
-as well as the legacy source field, checks the actual categories_for result and
-requires categories outside the original scope. The encrypted audit records the
-base, effective and new query categories. Tests use the public production profile
-and the real retriever query builder with mocked transport.
+The private protocol fixes a date **policy**, not a date that expires during
+approval. At job start, before requests or scores, freeze the last completed UTC
+day's end. All source queries use that immutable cutoff and their unchanged
+production lookbacks. Runs earlier than the protocol's minimum new cutoff stop.
+Do not crop already computed rankings to a one-day subset. Version metadata is
+retained: a later bioRxiv/Research Square version cannot be assigned an original
+date by parsing its DOI. Unknown original dates and uncertain title families are
+quarantined. Every formerly exposed family, including quarantined drafts and all
+versions linked by known identifiers, is excluded from independent labeling.
+Full production ranks remain available. Qualification creates a separately named
+validation population before ranking; it is not post-ranking replacement of an
+old production head. All arms use exactly the same qualified rows.
 
-The private blind CSV includes original title, captured original abstract,
-neutral source/venue/link, abstract provenance and explicit available/missing/
-incomplete markers. It never includes scores, algorithm identity, sampling
-reasons, directions or generated recommendation explanations.
+Source diagnostics distinguish complete empty, successful, failed and partial
+retrieval. They store source/scope/phase, safe host/path, page offsets, query
+length/hash, status, attempts, bounded retry history, timing and conversion-error
+counts. No headers, API keys, response bodies or full private query strings are
+retained. ArXiv instrumentation calls the original transport: 403/429 are not
+retried, 5xx retry limits and endpoint remain unchanged, redirects are not followed.
+A common-source failure/partial result stops before encoding and skips expansion.
+Other SDKs' hidden retries/coverage remain explicitly unknown when not observable.
+Diagnostic event truncation is counted. Swallowed HTTP failures cannot become a
+valid empty result. Events are scoped to this collection; unrelated prior SDK
+failures are excluded. A later successful different page/endpoint cannot clear a
+failure. Same-request transient recovery is recognized, and the pinned journal
+adapter's own per-journal/catalog completion contract explicitly certifies its
+existing allowed fallbacks. Unrecovered or ambiguous failures remain failed or
+partial. The observer adds no retry or alternate fetch route.
 
-No OpenAI cost or budget-ledger mutation is possible: no paid API credential is
-passed, and all scoring uses the pinned local Jina model. Standard hosted runner
-minutes and public metadata rate quotas remain subject to the existing account.
+## Blind burden and metrics
 
-After the separately approved run, retrieve the ciphertext through normal
-authorized artifact access, move it through private Library if necessary, decrypt
-locally and deliver only an algorithm-blinded table to the user. Do not export
-the Zotero library. Delete the transient data Secret and ciphertext artifact once
-verified retrieval completes. Nothing is pushed, dispatched or configured merely
-by reviewing this package.
+The mandatory pool is the union of A/B/C's actual **model top20 and quota-main
+top20**; top10 is a prefix. Actual random-exploration selections and six fixed-seed
+source-stratified draws are included with private selection reasons. No handpicked
+disagreement examples or relevance labels affect sampling. The theoretical bound
+is 141 = 6*20+3*5+6; if model/main heads coincide it is at most 81. Overlap normally
+reduces the count, but no actual count is claimed before capture. Report the real
+count first. Stage1 is the union of all six validation model/main top10 lists
+(maximum60, or30 when the two views coincide); stage2 is the fixed complement in
+the full blind pool. Both stages keep their original blind IDs and full-pool
+shuffle order, in batches of five. Stage2 never depends on stage1 judgments.
+Automatic export writes each stage plus its five-paper CSV batches, without
+algorithm, rank, score or sampling hints. Expanded-source labeling is a separate
+optional batch with the same bound, not automatically combined with the primary
+burden. All heads are true heads of the qualified validation population; exclusions were
+applied before scoring. Any remaining information gap blocks the affected metrics;
+never silently refill or truncate the mandatory head union.
 
-Generic tests use synthetic inputs only. They do not validate personalization or
-claim real baseline reproduction.
+Blind files show the same captured title, original abstract, source/link and
+missingness/provenance to the reader. They hide algorithm, score, rank, selection
+reason and generated recommendation explanation. Unjudged and information-
+insufficient records remain unknown, never label0. Compute P@10/@20 and DCG only
+when every prefix member is judged. Model, quota-main and random yield are separate
+views. Stage1 reports only fully judged top10 metrics; top20 waits for complete
+prefix judgments. Pooled NDCG explicitly uses only judged members of the comparison pool;
+complete-pool NDCG is unknown/bounded without a complete IDCG. No full-pool recall
+claim follows from partial labels. Must-read results are N/A if no label3 exists.
+
+## Future execution, after separate approval
+
+Proposed branch: `experiment/jina-fullpool-20261102`. The manual-only Test workflow
+has safe default `mode=tests` (synthetic controls, no private Secrets). A separately
+authorized `mode=jina_fullpool` may use one newly approved transient **data** Secret
+`JINA_FULLPOOL_INPUT` plus existing Zotero/OpenReview/OpenAlex credentials. This is
+not permission to create it or dispatch now. The old `JINA_OFFLINE_INPUT` is not
+read, changed or deleted by this proposal. Private input has no credentials and
+contains frozen rules, ranking config, source overrides and exposed-family IDs.
+Keep it local until separately approved.
+
+The job has read-only repository permissions, 45 minutes maximum, a fresh pinned
+checkout and fresh model/vector directories. No Actions cache, production state
+write or credential persistence is used. Only an RSA-OAEP-SHA256/AES-256-GCM sealed
+result is uploaded, retained one day. Public console has only status/paid_calls=0.
+The existing recipient private key stays local; it is absent from git and artifacts.
+Raw Zotero records, reference vectors and private runtime directories are deleted
+on normal/failure completion; ephemeral runner teardown covers cancellation.
+Read-only state is used only for identical filtering/pending quota reservation.
+No new paid model calls are permitted; earlier experimental spend is not reset.
+
+## Offline controls
+
+From the installed project environment, with BASELINE_ROOT pointing at the source
+checkout:
+
+```
+BASELINE_ROOT=/path/to/baseline python experiments/jina_offline/test_controls.py
+```
+
+The suite uses synthetic text/vectors and mocked HTTP only. Passing it establishes
+implementation behavior, not relevance gains or current source availability.
+Actual capture/effectiveness remains unverified until a separately authorized run
+and independent human labels are available.
+
+From an already decrypted captured result, staged export needs neither Zotero,
+embeddings nor API access:
+
+```
+python experiments/jina_offline/offline_eval.py --export-evaluation result.private.json --out private-blind
+```
+
+The existing recipient key and encrypted one-day artifact flow are unchanged.
+This export is local/private; it is not an additional GitHub run or data upload.

@@ -22,7 +22,7 @@ from time import monotonic
 
 PUBLIC = Path(__file__).resolve().parent
 PIN = '339d0185fff0f67e7726eeb162462652e8669a38'
-EXPERIMENT = 'jina-offline-20261101'
+EXPERIMENT = 'jina-fullpool-v1'
 ALLOWED_OVERRIDES = {'zotero', 'preprint_interests', 'source', 'abstracts', 'reranker', 'interest_profile', 'executor'}
 DENIED_ENV = {'OPENAI_API_KEY', 'SENDER_PASSWORD', 'EMBEDDING_CACHE_KEY', 'ZOTERO_WORKER_D1_TOKEN'}
 EXPORT_FORBIDDEN = {'corpus', 'config', 'vectors', 'history', 'private_input', 'runtime_overrides', 'paths'}
@@ -42,6 +42,8 @@ def validate_payload(payload):
         raise ValueError('paid_calls_not_authorized')
     if payload['protocol'].get('source_commit') != PIN:
         raise ValueError('wrong_source_pin')
+    if payload['protocol'].get('schema') != 'jina_fullpool_protocol_v1' or 'date_policy' not in payload['protocol']:
+        raise ValueError('fullpool_protocol_required')
     return payload
 
 
@@ -81,6 +83,19 @@ def expanded_arxiv_config(config, categories):
 
 
 def run_capture(private, payload):
+    sys.path.insert(0, str(Path(os.environ['BASELINE_ROOT']).resolve() / 'src'))
+    os.environ['JINA_OFFLINE_PRIVATE_DIR'] = str(private)
+    os.environ['HF_HOME'] = str(private / 'public_model')
+    from snapshot_policy import freeze_cutoff, frozen_source_dates
+    receipt = freeze_cutoff(payload['protocol']['date_policy'])
+    asof = datetime.fromisoformat(receipt['asof_exclusive'])
+    with frozen_source_dates(asof):
+        result = _run_capture(private, payload, asof)
+    result['date_policy_receipt'] = receipt
+    return result
+
+
+def _run_capture(private, payload, asof):
     baseline = Path(os.environ['BASELINE_ROOT']).resolve()
     history_root = Path(os.environ['HISTORY_ROOT']).resolve()
     if git_head(baseline) != PIN:
@@ -107,11 +122,13 @@ def run_capture(private, payload):
     from zot2dailypaper.selection import is_cover_title, select_papers
     from zot2dailypaper.scores import minimum_score
     from zot2dailypaper.state import State
+    from snapshot_policy import bind_arxiv_cutoff, capture_version_metadata, public_row
+    from http_diagnostics import collect
     logger.remove()
     for file, value in [('source_tree.snapshot.json', json.loads((PUBLIC / 'source_pin.json').read_text())),
                         ('runtime_config.frozen.private.json', payload['ranking_config']),
                         ('protocol.frozen.private.json', payload['protocol']),
-                        ('prior49.exclusions.private.json', payload['exclusions']),
+                        ('excluded_families.private.json', payload['exclusions']),
                         ('freeze_receipt.private.json', payload['freeze_receipt'])]:
         e.private_json(private / file, value)
     e.verify_source()
@@ -142,6 +159,10 @@ def run_capture(private, payload):
     if projection != payload['ranking_config']:
         raise ValueError('actual_runtime_ranking_projection_mismatch')
     ex = Executor(cfg)  # No Executor.run, _recommend, sync, delivery, or state save.
+    for name, retriever in ex.retrievers.items():
+        capture_version_metadata(retriever)
+        if name == 'arxiv':
+            bind_arxiv_cutoff(retriever, asof)
     original_corpus = ex.fetch_zotero_corpus()
     corpus = ex.filter_corpus(original_corpus)
     if not corpus:
@@ -152,17 +173,25 @@ def run_capture(private, payload):
     state = State(history_file, enabled=True, retention_days=int(cfg.state.retention_days))
     events, attempts, raw = [], [], []
     for name, retriever in ex.retrievers.items():
-        try:
-            papers = retriever.retrieve_papers()
-            attempts.append({'source': name, 'count': len(papers),
-                             'failure_count': len(getattr(retriever, 'failures', [])),
-                             'coverage_complete': None})
-            raw.extend(papers)
-        except Exception as error:
-            attempts.append({'source': name, 'error_type': type(error).__name__, 'coverage_complete': False})
+        papers, audit = collect(retriever, name, 'common')
+        attempts.append(audit)
+        raw.extend(papers)
+    if any(x['status'] in ('failed', 'partial') for x in attempts):
+        # Preserve diagnostics, never relabel a missing source as zero papers or
+        # spend the model run on an apparently complete recommendation test.
+        return {'status': 'source_preflight_failed_not_scored', 'paid_calls': 0,
+                'source_attempts': attempts, 'query_cutoff': asof.isoformat(),
+                'counts': {'retrieved_partial': len(raw), 'zotero_filtered': len(corpus)},
+                'filtered_corpus_sha256': e.digest([[p.title,p.abstract,p.doi,p.added_date.isoformat(),p.paths] for p in corpus]),
+                'expanded_source_status': 'not_attempted_after_common_source_failure',
+                'blind_ready': False}
     candidates = []
     for p in raw:
-        if is_cover_title(p.title):
+        updated = getattr(p, '_capture_updated', None)
+        if ((p.published and p.published >= asof) or
+                (updated and datetime.fromisoformat(updated) >= asof)):
+            events.append({'id': paper_id(p), 'stage': 'snapshot_cutoff', 'reason': 'source_record_after_cutoff'})
+        elif is_cover_title(p.title):
             events.append({'id': paper_id(p), 'stage': 'cover', 'reason': 'publisher_cover'})
         else:
             p.abstract = clean_abstract(p.abstract)
@@ -205,33 +234,24 @@ def run_capture(private, payload):
     gold['selection']['main_order'] = [paper_id(p) for p in chosen if p.recommendation_group != 'random']
     now = datetime.now(timezone.utc).isoformat()
     def row(p, pool):
-        date = p.published.date().isoformat() if p.published else ''
-        return {'id': paper_id(p), 'doi': p.doi, 'related_dois': p.related_dois,
-                'source': p.source, 'title': p.title, 'url': p.url, 'journal': p.journal,
-                'abstract': p.abstract, 'abstract_before_recovery': before.get(id(p), p.abstract),
-                'abstract_complete': bool(p.abstract.strip()) and not p.abstract.rstrip().endswith(('...', '…')),
-                'abstract_provenance': {'source': p.abstract_source or p.source,
-                                        'url': p.abstract_source_url or p.url}, 'retrieved_at': now,
-                'publication_kind': p.publication_kind,
-                'first_public_date': '' if p.related_dois else date,
-                'date_basis': 'source published date; related versions require independent earliest-date evidence',
-                'pool': pool}
+        return public_row(p, pool, before.get(id(p), p.abstract))
     rows = [row(p, 'common') for p in kept]
     extra_cfg, expanded_scope = expanded_arxiv_config(
         cfg, payload['protocol']['source_plan']['expanded']['arxiv_categories'])
     extra = get_retriever_cls('arxiv')(extra_cfg)
-    try:
-        expanded = extra.retrieve_papers()
-        attempts.append({'source': 'expanded_arxiv', 'count': len(expanded),
-                         'coverage_complete': None, **expanded_scope})
-        known = {paper_id(p) for p in kept}
-        rows += [row(p, 'expanded') for p in deduplicate(expanded)
-                 if paper_id(p) not in known and not state.has(p)
-                 and not (paper_dois(p) & ex.library_dois)
-                 and title_key(p.title) not in (ex.library_titles_without_doi if paper_doi(p) else ex.library_titles)]
-    except Exception as error:
-        attempts.append({'source': 'expanded_arxiv', 'error_type': type(error).__name__,
-                         'coverage_complete': False, **expanded_scope})
+    capture_version_metadata(extra)
+    bind_arxiv_cutoff(extra, asof)
+    expanded, extra_audit = collect(extra, 'arxiv', 'expanded')
+    extra_audit.update(expanded_scope)
+    attempts.append(extra_audit)
+    known = {paper_id(p) for p in kept}
+    aliases = set().union(*(paper_dois(p) for p in kept))
+    rows += [row(p, 'expanded') for p in deduplicate(expanded)
+             if paper_id(p) not in known and not paper_dois(p).intersection(aliases)
+             and (not p.published or p.published < asof)
+             and (not getattr(p, '_capture_updated', None) or datetime.fromisoformat(p._capture_updated) < asof)
+             and not state.has(p) and not (paper_dois(p) & ex.library_dois)
+             and title_key(p.title) not in (ex.library_titles_without_doi if paper_doi(p) else ex.library_titles)]
     # Encode complete source texts; raw references stay only in process/private temp.
     refs = [{'id': f'R{i:06}', 'title': p.title, 'abstract': p.abstract, 'doi': p.doi,
              'added_date': p.added_date.isoformat(), 'paths': p.paths} for i, p in enumerate(corpus)]
@@ -272,6 +292,8 @@ def run_capture(private, payload):
     pack['vectors_sha256'] = e.digest(pack['vectors'])
     pending = [dict(row(p, 'pending'), recommendation_group=p.recommendation_group) for p in pending_papers]
     snapshot = {'source_commit': PIN, 'captured_at': now, 'config': projection,
+                'query_cutoff': asof.isoformat(),
+                'source_days': {name: int(cfg.source[name].get('window_days') or 7) for name in ex.retrievers},
                 'model_identity': identity, 'corpus': refs, 'candidates': rows,
                 'candidate_events': events, 'source_attempts': attempts,
                 'history': {'sha256': hashlib.sha256(history_file.read_bytes()).hexdigest(),
@@ -281,10 +303,12 @@ def run_capture(private, payload):
     result['capture_counts'] = {'zotero_before_filter': len(original_corpus), 'zotero_after_filter': len(corpus),
                                 'raw_candidates': len(raw), 'common_after_filters': len(kept)}
     result['source_configuration_sha256'] = e.digest(OmegaConf.to_container(cfg.source, resolve=False))
+    result['retrieval_interest_configuration_sha256'] = e.digest(OmegaConf.to_container(cfg.preprint_interests, resolve=False))
+    result['runtime_overrides_sha256'] = e.digest(payload['runtime_overrides'])
     # Candidate public text is allowed only in the sealed result; no raw Zotero
     # reference text, titles, DOI list, collection paths, vectors or state export.
     result['public_candidates'] = rows
-    result['baseline_scope'] = 'new captured real baseline; historical 41248417743 full inputs unavailable'
+    result['baseline_scope'] = 'production full-pool A replay retained for audit; independent pool qualified before A/B/C scoring/quotas; no production-head claim for validation results'
     check_export(result)
     return result
 
@@ -298,7 +322,7 @@ def main():
     try:
         # Untrusted exception messages and all library progress stay off public logs.
         with open(os.devnull, 'w') as quiet, contextlib.redirect_stdout(quiet), contextlib.redirect_stderr(quiet):
-            payload = validate_payload(json.loads(os.environ.pop('JINA_OFFLINE_INPUT', '{}')))
+            payload = validate_payload(json.loads(os.environ.pop('JINA_FULLPOOL_INPUT', '{}')))
             from seal import canonical
             protocol_hash = hashlib.sha256(canonical(payload['protocol'])).hexdigest()
             result = run_capture(private, payload)
@@ -313,17 +337,22 @@ def main():
                       'public_model_artifact_hashes_missing',
                       'expanded_arxiv_scope_not_distinct',
                       'actual_runtime_ranking_projection_mismatch', 'actual_zotero_corpus_empty',
-                      'read_only_history_snapshot_missing', 'no_actual_common_candidates'}
+                      'read_only_history_snapshot_missing', 'no_actual_common_candidates',
+                      'fullpool_protocol_required', 'unsupported_snapshot_date_policy',
+                      'invalid_snapshot_lag', 'no_new_completed_snapshot_yet',
+                      'explicit_arxiv_window_required_for_frozen_snapshot'}
         if type(error) is ValueError and str(error) in safe_codes:
             result['error_code'] = str(error)
         result['error_sites'] = [{'file': Path(x.filename).name, 'function': x.name, 'line': x.lineno}
                                  for x in traceback.extract_tb(error.__traceback__)[-4:]]
     finally:
         from seal import seal
-        check_export(result)
-        envelope = seal(result, (PUBLIC / 'recipient.public.pem').read_bytes(), EXPERIMENT, protocol_hash)
-        output.write_text(json.dumps(envelope, separators=(',', ':')))
-        shutil.rmtree(private, ignore_errors=True)
+        try:
+            check_export(result)
+            envelope = seal(result, (PUBLIC / 'recipient.public.pem').read_bytes(), EXPERIMENT, protocol_hash)
+            output.write_text(json.dumps(envelope, separators=(',', ':')))
+        finally:
+            shutil.rmtree(private, ignore_errors=True)
     print(json.dumps({'status': result['status'], 'paid_calls': 0, 'sealed_result_saved': True}))
 
 

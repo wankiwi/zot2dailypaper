@@ -5,16 +5,40 @@ on:
       mode:
         description: One isolated read-only Jina capture; no email or paid API
         type: choice
-        options: [jina_offline]
-        default: jina_offline
+        options: [tests, jina_fullpool]
+        default: tests
 permissions:
   contents: read
 concurrency:
-  group: jina-offline-capture
+  group: jina-fullpool-capture
   cancel-in-progress: false
 jobs:
+  controls:
+    if: ${{ github.repository == 'wankiwi/zot2dailypaper' && github.ref == 'refs/heads/experiment/jina-fullpool-20261102' && inputs.mode == 'tests' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: driver
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          ref: 339d0185fff0f67e7726eeb162462652e8669a38
+          path: baseline
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+      - name: Synthetic offline controls only
+        working-directory: baseline
+        env:
+          BASELINE_ROOT: ${{ github.workspace }}/baseline
+        run: |
+          uv sync --frozen
+          uv run --frozen python ../driver/experiments/jina_offline/test_controls.py
   isolated-jina:
-    if: ${{ github.repository == 'wankiwi/zot2dailypaper' && github.ref == 'refs/heads/experiment/jina-input-audit-20261101' && inputs.mode == 'jina_offline' }}
+    if: ${{ github.repository == 'wankiwi/zot2dailypaper' && github.ref == 'refs/heads/experiment/jina-fullpool-20261102' && inputs.mode == 'jina_fullpool' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -46,7 +70,7 @@ jobs:
           BASELINE_ROOT: ${{ github.workspace }}/baseline
           HISTORY_ROOT: ${{ github.workspace }}/history
           SEALED_OUTPUT: ${{ github.workspace }}/sealed/result.sealed.json
-          JINA_OFFLINE_INPUT: ${{ secrets.JINA_OFFLINE_INPUT }}
+          JINA_FULLPOOL_INPUT: ${{ secrets.JINA_FULLPOOL_INPUT }}
           ZOTERO_ID: ${{ secrets.ZOTERO_ID }}
           ZOTERO_KEY: ${{ secrets.ZOTERO_KEY }}
           OPENREVIEW_USERNAME: ${{ secrets.OPENREVIEW_USERNAME }}
@@ -57,7 +81,7 @@ jobs:
         if: ${{ always() && !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: jina-offline-sealed-${{ github.run_id }}
+          name: jina-fullpool-sealed-${{ github.run_id }}
           path: sealed/result.sealed.json
           if-no-files-found: warn
           retention-days: 1
