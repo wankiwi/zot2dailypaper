@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from typing import Optional, TypeVar
 from datetime import datetime
 import re
+from urllib.parse import urlsplit
 from time import sleep
 from openai import OpenAI
 from loguru import logger
@@ -124,8 +125,14 @@ class Paper:
         kwargs = dict(llm_params.get('generation_kwargs', {}))
         if len(system.encode('utf-8')) > SYSTEM_BYTES:
             raise BudgetUnavailable('System prompt exceeds verified input bound')
-        kwargs = {'model': kwargs['model'], 'max_tokens': MAX_OUTPUT_TOKENS, 'n': 1,
-                  'extra_body': {'enable_thinking': False}}
+        if urlsplit(str(llm_params.get('api',{}).get('base_url',''))).hostname == 'api.openai.com':
+            # Only the provider/model admitted by budget_plan can reach this
+            # client. The output bound includes all reasoning/visible tokens.
+            kwargs = {'model':kwargs['model'],'max_completion_tokens':MAX_OUTPUT_TOKENS,
+                      'n':1,'reasoning_effort':'none','store':False,'service_tier':'default'}
+        else:
+            kwargs = {'model': kwargs['model'], 'max_tokens': MAX_OUTPUT_TOKENS, 'n': 1,
+                      'extra_body': {'enable_thinking': False}}
         
         def operation():
             verify_paid_client(openai_client, kwargs['model'], requests)

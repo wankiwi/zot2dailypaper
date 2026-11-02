@@ -52,7 +52,15 @@ def budget_now():
     return datetime.now(timezone.utc)
 
 
-def pricing_warning():
+def pricing_warning(config=None):
+    if config is not None:
+        try:
+            if urlsplit(str(config.api.base_url)).hostname == 'api.openai.com':
+                # Official estimates/conversion are attached to their own quote;
+                # never show an unrelated SiliconFlow stale-price warning.
+                return ''
+        except (ValueError,AttributeError):
+            pass
     if not VERIFIED_PRICING:
         return ''
     pricing, status, _ = review(VERIFIED_PRICING, utc_day())
@@ -79,25 +87,44 @@ def budget_plan(config, *, with_pricing=False):
         raise BudgetUnavailable('Daily CNY budget must be an explicitly configured positive finite number') from None
     if not cap.is_finite() or cap <= 0:
         raise BudgetUnavailable('Daily CNY budget must be an explicitly configured positive finite number')
-    if VERIFIED_PRICING is None:
-        raise BudgetUnavailable('Exact provider pricing/non-thinking token bound is not verified; paid calls disabled')
-    pricing = VERIFIED_PRICING
     try:
         base = urlsplit(str(config.api.base_url))
         port = base.port
     except ValueError as exc:
         raise BudgetUnavailable('Endpoint is not a valid verified HTTPS origin') from exc
+    official = base.hostname == 'api.openai.com'
+    if official:
+        from .openai_pricing import MODEL, quote, QuoteUnavailable
+        if (base.scheme != 'https' or port not in (None,443) or base.path.rstrip('/') != '/v1'
+                or base.query or base.fragment or base.username or base.password):
+            raise BudgetUnavailable('Endpoint does not match the verified OpenAI origin')
+        if config.generation_kwargs.get('model') != MODEL:
+            raise BudgetUnavailable('Model does not match the verified OpenAI pricing record')
+        try:
+            pricing = quote(utc_day())
+        except QuoteUnavailable:
+            raise BudgetUnavailable('OpenAI price/FX quote unavailable or expired; original abstract retained',
+                                    reason='billing_unverified') from None
+    else:
+        if VERIFIED_PRICING is None:
+            raise BudgetUnavailable('Exact provider pricing/non-thinking token bound is not verified; paid calls disabled')
+        pricing = VERIFIED_PRICING
     if base.scheme != 'https' or base.hostname != pricing['host'] or port not in (None, 443) or base.path.rstrip('/') != '/v1' or base.query or base.fragment or base.username or base.password:
         raise BudgetUnavailable('Endpoint does not match the verified pricing record')
     if config.generation_kwargs.get('model') != pricing['model']:
         raise BudgetUnavailable('Model does not match the verified pricing record')
-    pricing, status, _ = review(VERIFIED_PRICING, utc_day())
-    if status == 'verified':
-        logger.info('LLM pricing automatically verified for {} on {}; conservative input/output CNY per million: {}/{}',
-                    pricing['model'], pricing['checked_at'], pricing['input_cny_per_million'], pricing['output_cny_per_million'])
-    warning = pricing_warning()
-    if warning:
-        logger.warning(warning)
+    if official:
+        logger.info('OpenAI summary quote {}: CNY/million ceiling input={}, output={}; {}',
+                    pricing['quote_version'],pricing['input_cny_per_million'],
+                    pricing['output_cny_per_million'],pricing['conversion_note'])
+    else:
+        pricing, status, _ = review(VERIFIED_PRICING, utc_day())
+        if status == 'verified':
+            logger.info('LLM pricing automatically verified for {} on {}; conservative input/output CNY per million: {}/{}',
+                        pricing['model'], pricing['checked_at'], pricing['input_cny_per_million'], pricing['output_cny_per_million'])
+        warning = pricing_warning()
+        if warning:
+            logger.warning(warning)
     input_tokens = PROMPT_BYTES + SYSTEM_BYTES + FRAMING_TOKENS
     per_call = (Decimal(input_tokens) * Decimal(pricing['input_cny_per_million']) +
                 Decimal(MAX_OUTPUT_TOKENS) * Decimal(pricing['output_cny_per_million'])) / Decimal(1000000)
@@ -205,6 +232,10 @@ class BudgetRequests(ModelRequests):
                 or (self.window is None and utc_day() != self.day)):
             raise BudgetUnavailable('Budget day changed; no new request until a fresh run reserves that day',
                                     reason='day_changed', day=self.day, timezone_name=self.timezone_name)
+        if (self.price_schedule is not None and self.price_schedule.provider == 'OpenAI'
+                and utc_day() > self.price_schedule.valid_through):
+            raise BudgetUnavailable('OpenAI price/FX quote expired after admission; no new request',
+                                    reason='billing_unverified',day=self.day,timezone_name=self.timezone_name)
 
     def call(self, operation):
         # Serialize reservation and actual dispatch. Queued callers must observe
@@ -331,6 +362,8 @@ def audit_response(response, expected_model):
     """Unexpected metadata terminates queued calls; never refund uncertain billing."""
     if getattr(response, 'model', None) != expected_model:
         raise BudgetUnavailable('Provider response model does not match reserved model', reason='billing_unverified')
+    if expected_model == 'gpt-6-luna' and getattr(response,'service_tier',None) not in (None,'default'):
+        raise BudgetUnavailable('Provider changed the reserved processing tier',reason='billing_unverified')
     usage = getattr(response, 'usage', None)
     if usage is None:
         raise BudgetUnavailable('Provider response has no billable usage metadata', reason='billing_unverified')

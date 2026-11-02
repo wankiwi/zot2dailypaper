@@ -15,7 +15,7 @@ from .construct_email import render_email
 from .utils import send_email
 from openai import OpenAI, DefaultHttpxClient, APIError
 from .llm import ModelRequests, request_policy
-from .budget import budget_plan, prepare_budget, BudgetUnavailable
+from .budget import budget_plan, prepare_budget, BudgetUnavailable, pricing_warning
 from .preprint_interests import enabled_sources
 from .scores import minimum_score
 from .selection import quotas_for, select_papers, pending_batch, is_cover_title
@@ -227,6 +227,7 @@ class Executor:
                                                          zotero_action_origin=self.config.email.get('zotero_action_origin'),
                                                          interest_weights=self.effective_interest_weights,
                                                          ranking_strategy=self.config.reranker.get('strategy', 'multi_interest_profile'),
+                                                         pricing_notice=pricing_warning(self.config.llm),
                                                          api_costs=self.api_costs, llm_enabled=self.config.llm.get('enabled', True)))
                     logger.info(f'SMTP accepted {len(pending)} recommendations')
                     state.mark(pending, 'email')
