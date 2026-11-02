@@ -3,90 +3,67 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Isolated tests, OpenReview checks, or one guarded paid LLM summary (no email)
+        description: One isolated read-only Jina capture; no email or paid API
         type: choice
-        options: [tests, openreview, openreview_full, llm, zotero_readonly]
-        default: tests
-      collection_name_sha256:
-        description: SHA256 of the exact target collection name (read-only inspection)
-        type: string
-        default: ''
+        options: [jina_offline]
+        default: jina_offline
 permissions:
   contents: read
+concurrency:
+  group: jina-offline-capture
+  cancel-in-progress: false
 jobs:
-  isolated-tests:
-    if: ${{ inputs.mode == 'tests' }}
+  isolated-jina:
+    if: ${{ github.repository == 'wankiwi/zot2dailypaper' && github.ref == 'refs/heads/experiment/jina-input-audit-20261101' && inputs.mode == 'jina_offline' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v7
-      - name: Install locked dependencies
-        run: uv sync --frozen
-      - name: Run isolated tests without delivery credentials
-        run: uv run --frozen pytest
-  openreview-validation:
-    if: ${{ inputs.mode == 'openreview' || inputs.mode == 'openreview_full' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
         with:
+          path: driver
           persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          ref: 339d0185fff0f67e7726eeb162462652e8669a38
+          path: baseline
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          ref: paper-state
+          path: history
+          persist-credentials: false
+          sparse-checkout: recommendations.json
+          sparse-checkout-cone-mode: false
       - uses: astral-sh/setup-uv@v7
-      - name: Install locked dependencies
+        with:
+          enable-cache: false
+      - name: Install pinned baseline dependencies
+        working-directory: baseline
         run: uv sync --frozen
-      - name: Validate official login and public submissions only
+      - name: Capture and compare privately
+        working-directory: baseline
         env:
+          BASELINE_ROOT: ${{ github.workspace }}/baseline
+          HISTORY_ROOT: ${{ github.workspace }}/history
+          SEALED_OUTPUT: ${{ github.workspace }}/sealed/result.sealed.json
+          JINA_OFFLINE_INPUT: ${{ secrets.JINA_OFFLINE_INPUT }}
+          ZOTERO_ID: ${{ secrets.ZOTERO_ID }}
+          ZOTERO_KEY: ${{ secrets.ZOTERO_KEY }}
           OPENREVIEW_USERNAME: ${{ secrets.OPENREVIEW_USERNAME }}
           OPENREVIEW_PASSWORD: ${{ secrets.OPENREVIEW_PASSWORD }}
-        run: |
-          if [ "${{ inputs.mode }}" = "openreview_full" ]; then
-            uv run --frozen python scripts/diagnose_openreview.py
-          else
-            uv run --frozen python scripts/validate_openreview.py
-          fi
-  llm-validation:
-    if: ${{ inputs.mode == 'llm' }}
-    concurrency:
-      group: daily-papers
-      cancel-in-progress: false
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: write # Only the durable daily budget and public pricing receipt are updated.
-    steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v7
-      - name: Install locked dependencies
-        run: uv sync --frozen
-      - name: Restore last verified LLM pricing
-        run: uv run --frozen python scripts/workflow_state.py restore-pricing
-      - name: Validate one Chinese summary without delivery
-        env:
-          CUSTOM_CONFIG: ${{ vars.CUSTOM_CONFIG }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: uv run --frozen python scripts/validate_llm.py
-      - name: Preserve verified LLM pricing
+          OPENALEX_API_KEY: ${{ secrets.OPENALEX_API_KEY }}
+        run: uv run --frozen python ../driver/experiments/jina_offline/actions_runner.py > /dev/null 2>&1
+      - name: Retain ciphertext only
         if: ${{ always() && !cancelled() }}
-        run: uv run --frozen python scripts/workflow_state.py save-pricing
-
-  zotero-readonly-inspection:
-    if: ${{ inputs.mode == 'zotero_readonly' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v6
+        uses: actions/upload-artifact@v4
         with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@v7
-      - name: Install locked dependencies
-        run: uv sync --frozen
-      - name: Read permission names and target collection existence only
-        env:
-          ZOTERO_KEY: ${{ secrets.ZOTERO_KEY }}
-          ZOTERO_ID: ${{ secrets.ZOTERO_ID }}
-          TARGET_COLLECTION_SHA256: ${{ inputs.collection_name_sha256 }}
-        run: uv run --frozen python scripts/inspect_zotero_access.py
+          name: jina-offline-sealed-${{ github.run_id }}
+          path: sealed/result.sealed.json
+          if-no-files-found: warn
+          retention-days: 1
+      - name: Delete temporary runtime configuration
+        if: ${{ always() }}
+        shell: python
+        run: |
+          from pathlib import Path
+          Path('baseline/config/runtime.yaml').unlink(missing_ok=True)

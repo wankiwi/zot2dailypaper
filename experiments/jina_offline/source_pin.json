@@ -1,0 +1,109 @@
+{
+  "sha": "339d0185fff0f67e7726eeb162462652e8669a38",
+  "tree": [
+    {
+      "path": "src/zot2dailypaper/identity.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8a32176dc8dac911cb55f3c7dbd104c8ad6185d2",
+      "size": 8246,
+      "url": "https://api.github.com/repos/wankiwi/zot2dailypaper/git/blobs/8a32176dc8dac911cb55f3c7dbd104c8ad6185d2"
+    },
+    {
+      "path": "src/zot2dailypaper/interest_profile.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8a2e5d4427495507340d5ed46ec75545b83446c6",
+      "size": 2177,
+      "url": "https://api.github.com/repos/wankiwi/zot2dailypaper/git/blobs/8a2e5d4427495507340d5ed46ec75545b83446c6"
+    },
+    {
+      "path": "src/zot2dailypaper/protocol.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "e567e2a65917d6ac52a5105eaeb5d1a993d90cff",
+      "size": 12258,
+      "url": "https://api.github.com/repos/wankiwi/zot2dailypaper/git/blobs/e567e2a65917d6ac52a5105eaeb5d1a993d90cff"
+    },
+    {
+      "path": "src/zot2dailypaper/reranker/base.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b799258fd186f6949fb62159df77314cf81ebc24",
+      "size": 7240,
+      "url": "https://api.github.com/repos/wankiwi/zot2dailypaper/git/blobs/b799258fd186f6949fb62159df77314cf81ebc24"
+    },
+    {
+      "path": "src/zot2dailypaper/reranker/embedding_cache.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5d15438e46eb0297c2c3469fd6099b6700de672c",
+      "size": 5463,
+      "url": "https://api.github.com/repos/wankiwi/zot2dailypaper/git/blobs/5d15438e46eb0297c2c3469fd6099b6700de672c"
+    },
+    {
+      "path": "src/zot2dailypaper/reranker/experiments.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "23a23f842ec473b510cf09d54e15289a1edef13c",
+      "size": 2802,
+      "url": "https://api.github.com/repos/wankiwi/zot2dailypaper/git/blobs/23a23f842ec473b510cf09d54e15289a1edef13c"
+    },
+    {
+      "path": "src/zot2dailypaper/reranker/local.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c17fd5f4658b2fd0f1ae583b32b7f674fc22eb6d",
+      "size": 13178,
+      "url": "https://api.github.com/repos/wankiwi/zot2dailypaper/git/blobs/c17fd5f4658b2fd0f1ae583b32b7f674fc22eb6d"
+    },
+    {
+      "path": "src/zot2dailypaper/reranker/onnx_encoder.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "da0d540948bc300993a60c98dfc2ef6fd5ae2221",
+      "size": 5105,
+      "url": "https://api.github.com/repos/wankiwi/zot2dailypaper/git/blobs/da0d540948bc300993a60c98dfc2ef6fd5ae2221"
+    },
+    {
+      "path": "src/zot2dailypaper/reranker/strategies.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fe6216246ce40612e16c75ccd3163a5c99deeb88",
+      "size": 5093,
+      "url": "https://api.github.com/repos/wankiwi/zot2dailypaper/git/blobs/fe6216246ce40612e16c75ccd3163a5c99deeb88"
+    },
+    {
+      "path": "src/zot2dailypaper/scores.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8914482e004a67b980d858d2a704b12d3ee24a03",
+      "size": 1834,
+      "url": "https://api.github.com/repos/wankiwi/zot2dailypaper/git/blobs/8914482e004a67b980d858d2a704b12d3ee24a03"
+    },
+    {
+      "path": "src/zot2dailypaper/selection.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "4f7446d47554a9df3f983f77634a9733c7ed42b7",
+      "size": 2948,
+      "url": "https://api.github.com/repos/wankiwi/zot2dailypaper/git/blobs/4f7446d47554a9df3f983f77634a9733c7ed42b7"
+    },
+    {
+      "path": "src/zot2dailypaper/preprint_interests.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "5a646ffb652daa137986480c67ea23d64373f464",
+      "size": 4807,
+      "url": "https://api.github.com/repos/wankiwi/zot2dailypaper/git/blobs/5a646ffb652daa137986480c67ea23d64373f464"
+    },
+    {
+      "path": "src/zot2dailypaper/retriever/arxiv_retriever.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "2397a8618320b7dadd68fb27f10736fee9e99b65",
+      "size": 18943,
+      "url": "https://api.github.com/repos/wankiwi/zot2dailypaper/git/blobs/2397a8618320b7dadd68fb27f10736fee9e99b65"
+    }
+  ]
+}
