@@ -47,6 +47,7 @@ class PriceSchedule:
     # None means full input rate, without claiming an unverified cache discount.
     cache_read_rate: Decimal | None = None
     cache_write_rate: Decimal | None = None
+    conversion_note: str = ''
 
     def __post_init__(self):
         if not re.fullmatch(r'[A-Z]{3}', self.currency):
@@ -66,6 +67,11 @@ def summary_schedule(record):
     Seed/public review rates use the peak input price for ALL input tokens. Cache
     discounts and off-peak tiers are deliberately not applied to this estimate.
     """
+    if record['host'] == 'api.openai.com':
+        return PriceSchedule('OpenAI',record['model'],'chat','CNY',
+                             record['input_cny_per_million'],record['output_cny_per_million'],
+                             record['quote_version'],record['verified_on'],record['valid_through'],
+                             conversion_note=record['conversion_note'])
     identity = {key: record[key] for key in ('host', 'model', 'input_cny_per_million',
                                             'output_cny_per_million', 'verified_on', 'valid_through')}
     version = 'siliconflow-peak-v1-' + sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:12]
@@ -192,6 +198,9 @@ class ApiCosts:
                  'no account balance, taxes or currency conversion. Model API usage only; prior runs are excluded.']
         with self._lock:
             events = list(self.attempts)
+        if any(event.schedule and event.schedule.conversion_note for event in events):
+            lines[1] = lines[1].replace('no account balance, taxes or currency conversion.',
+                                      'no account balance or taxes; explicitly quoted conservative currency conversion only.')
         if delivery_only:
             lines.append('Delivery-only replay: no new model API calls or summary generation.')
         if not llm_enabled:
@@ -232,6 +241,8 @@ class ApiCosts:
                              f'cache_write={schedule.cache_write_rate if schedule.cache_write_rate is not None else "full input rate"}; '
                              f'verified {schedule.verified_on}, valid through {schedule.valid_through}{stale}. '
                              'Full input rate means no cache discount applied; estimates may differ from charges.')
+                if schedule.conversion_note:
+                    lines.append('Currency conversion / 保守折算: '+schedule.conversion_note)
             else:
                 lines.append('Price schedule: unavailable; currency and cost unknown.')
             issues = sorted({event.issue for event in attempts if event.issue})
