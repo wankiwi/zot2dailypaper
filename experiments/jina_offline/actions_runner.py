@@ -14,6 +14,8 @@ import os
 from pathlib import Path
 import random
 import shutil
+import signal
+from threading import Event, Lock, Thread
 import subprocess
 import sys
 import tempfile
@@ -58,6 +60,117 @@ def check_export(value):
             check_export(child)
 
 
+class CaptureCancelled(BaseException):
+    """Cancellation must escape collectors/SDKs that catch ordinary errors."""
+
+
+def write_sealed_atomic(output, value, protocol_hash):
+    """A killed write must leave the previous complete encrypted checkpoint."""
+    from seal import seal
+    check_export(value)
+    envelope=seal(value,(PUBLIC/'recipient.public.pem').read_bytes(),EXPERIMENT,protocol_hash)
+    fd,name=tempfile.mkstemp(prefix='.checkpoint-',dir=output.parent)
+    try:
+        with os.fdopen(fd,'w') as stream:
+            json.dump(envelope,stream,separators=(',',':'))
+            stream.flush();os.fsync(stream.fileno())
+        os.replace(name,output)
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+
+class CaptureProgress:
+    """Only fixed phase metadata is public; source detail remains encrypted."""
+    PHASES={'startup','validate','configure','zotero','history','retrieve_common',
+            'filter_common','initial_rerank','recover_abstracts','rerank_recovered',
+            'retrieve_expanded','encode_snapshot','hash_model','evaluate_pools','complete'}
+    COUNTS={'zotero_before_filter','zotero_after_filter','retrieved_common','common_after_filters',
+            'expanded_candidates','snapshot_texts','encode_calls','encode_texts',
+            'encoder_present_at_entry','model_artifact_files'}
+    SOURCES={'journals','arxiv','biorxiv','medrxiv','researchsquare','openreview','chemrxiv'}
+
+    def __init__(self,output,interval=30):
+        self.output=output;self.started=monotonic();self.protocol_hash='unavailable'
+        self.phase='startup';self.source=None;self.counts={};self.attempts=[];self.events=[]
+        self.lock=Lock();self.stop=Event();self.thread=None;self.stream=None
+        if os.environ.get('JINA_PROGRESS_FD')=='3':
+            # Dedicated descriptor survives stdout/stderr suppression. Never tee
+            # raw provider/model output or relax the private capture redirection.
+            self.stream=os.fdopen(os.dup(3),'w',buffering=1)
+        self.record('start') # A valid encrypted seed precedes all private work.
+        if interval:
+            self.thread=Thread(target=self._heartbeat,args=(interval,),daemon=True)
+            self.thread.start()
+
+    def _snapshot(self):
+        return {'schema':'jina_capture_checkpoint_v1','status':'incomplete_checkpoint',
+                'paid_calls':0,'baseline_verified':False,'blind_ready':False,
+                'last_phase':self.phase,'active_source':self.source,
+                'elapsed_seconds':round(monotonic()-self.started,3),
+                'counts':dict(self.counts),'source_attempts':copy.deepcopy(self.attempts),
+                'phase_events':list(self.events[-200:]),'phase_events_dropped':max(0,len(self.events)-200),
+                'limitation':'diagnostic checkpoint only; no complete baseline/evaluation or ranking claim'}
+
+    def record(self,event='start',phase=None,source=None,attempts=None,**counts):
+        if phase is not None and phase not in self.PHASES:
+            raise ValueError('unsafe_progress_phase')
+        if source is not None and source not in self.SOURCES:
+            raise ValueError('unsafe_progress_source')
+        if set(counts)-self.COUNTS or any(type(v) not in (int,bool) or v<0 for v in counts.values()):
+            raise ValueError('unsafe_progress_count')
+        if event not in {'start','done','heartbeat','encode_start','encode_done','final'}:
+            raise ValueError('unsafe_progress_event')
+        with self.lock:
+            if phase is not None:self.phase=phase;self.source=source
+            self.counts.update(counts)
+            if attempts is not None:self.attempts=copy.deepcopy(attempts)
+            public={'phase':self.phase,'event':event,'elapsed_seconds':round(monotonic()-self.started,3)}
+            if self.source is not None:public['source']=self.source
+            self.events.append(dict(public))
+            write_sealed_atomic(self.output,self._snapshot(),self.protocol_hash)
+            if self.stream:
+                # No corpus/candidate counts, queries, identifiers, profile or scores.
+                self.stream.write(json.dumps(dict(public,sealed_checkpoint_saved=True))+'\n')
+                self.stream.flush()
+
+    def _heartbeat(self,interval):
+        while not self.stop.wait(interval):
+            try:self.record('heartbeat')
+            except Exception:
+                # Keep the last valid checkpoint. The worker's next explicit
+                # checkpoint still fails normally if storage/encryption broke.
+                self.stop.set()
+
+    def finish(self,result):
+        self.stop.set()
+        if self.thread:self.thread.join(timeout=2)
+        with self.lock:
+            trace=self._snapshot()
+            if result.get('status') in {'blocked_or_failed','capture_cancelled','blocked_before_inference'}:
+                value=dict(trace,**result)
+            else:
+                value=dict(result,capture_progress={k:v for k,v in trace.items()
+                           if k not in {'schema','status','baseline_verified','blind_ready','limitation','paid_calls'}})
+            write_sealed_atomic(self.output,value,self.protocol_hash)
+            if self.stream:
+                self.stream.write(json.dumps({'phase':self.phase,'event':'final',
+                    'elapsed_seconds':round(monotonic()-self.started,3),'sealed_checkpoint_saved':True})+'\n')
+                self.stream.close()
+
+    def trace_encoder(self,ranker):
+        original=ranker._encode_texts
+        calls=0
+        def encode(texts,*args,**kwargs):
+            nonlocal calls
+            calls+=1
+            self.record('encode_start',encode_calls=calls,encode_texts=len(texts),
+                        encoder_present_at_entry=hasattr(ranker,'_encoder'))
+            result=original(texts,*args,**kwargs)
+            self.record('encode_done')
+            return result
+        ranker._encode_texts=encode
+
+
 def git_head(root):
     return subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
 
@@ -82,7 +195,7 @@ def expanded_arxiv_config(config, categories):
                    'new_categories': new, 'scope_verified_before_fetch': True}
 
 
-def run_capture(private, payload):
+def run_capture(private, payload, progress=None):
     sys.path.insert(0, str(Path(os.environ['BASELINE_ROOT']).resolve() / 'src'))
     os.environ['JINA_OFFLINE_PRIVATE_DIR'] = str(private)
     os.environ['HF_HOME'] = str(private / 'public_model')
@@ -90,12 +203,15 @@ def run_capture(private, payload):
     receipt = freeze_cutoff(payload['protocol']['date_policy'])
     asof = datetime.fromisoformat(receipt['asof_exclusive'])
     with frozen_source_dates(asof):
-        result = _run_capture(private, payload, asof)
+        result = _run_capture(private, payload, asof, progress)
     result['date_policy_receipt'] = receipt
     return result
 
 
-def _run_capture(private, payload, asof):
+def _run_capture(private, payload, asof, progress=None):
+    def stage(name,event='start',**fields):
+        if progress:progress.record(event,phase=name,**fields)
+    stage('configure')
     baseline = Path(os.environ['BASELINE_ROOT']).resolve()
     history_root = Path(os.environ['HISTORY_ROOT']).resolve()
     if git_head(baseline) != PIN:
@@ -163,19 +279,26 @@ def _run_capture(private, payload, asof):
         capture_version_metadata(retriever)
         if name == 'arxiv':
             bind_arxiv_cutoff(retriever, asof)
+    if progress:progress.trace_encoder(ex.reranker)
+    stage('zotero')
     original_corpus = ex.fetch_zotero_corpus()
     corpus = ex.filter_corpus(original_corpus)
     if not corpus:
         raise ValueError('actual_zotero_corpus_empty')
+    stage('zotero','done',zotero_before_filter=len(original_corpus),zotero_after_filter=len(corpus))
+    stage('history')
     history_file = history_root / 'recommendations.json'
     if not history_file.is_file():
         raise ValueError('read_only_history_snapshot_missing')
     state = State(history_file, enabled=True, retention_days=int(cfg.state.retention_days))
+    stage('history','done')
     events, attempts, raw = [], [], []
     for name, retriever in ex.retrievers.items():
+        stage('retrieve_common',source=name)
         papers, audit = collect(retriever, name, 'common')
         attempts.append(audit)
         raw.extend(papers)
+        stage('retrieve_common','done',source=name,attempts=attempts,retrieved_common=len(raw))
     if any(x['status'] in ('failed', 'partial') for x in attempts):
         # Preserve diagnostics, never relabel a missing source as zero papers or
         # spend the model run on an apparently complete recommendation test.
@@ -185,6 +308,7 @@ def _run_capture(private, payload, asof):
                 'filtered_corpus_sha256': e.digest([[p.title,p.abstract,p.doi,p.added_date.isoformat(),p.paths] for p in corpus]),
                 'expanded_source_status': 'not_attempted_after_common_source_failure',
                 'blind_ready': False}
+    stage('filter_common')
     candidates = []
     for p in raw:
         updated = getattr(p, '_capture_updated', None)
@@ -212,17 +336,24 @@ def _run_capture(private, payload, asof):
             kept.append(p)
     if not kept:
         raise ValueError('no_actual_common_candidates')
+    stage('filter_common','done',common_after_filters=len(kept))
     before = {id(p): p.abstract for p in kept}
+    stage('initial_rerank')
     original = ex.reranker.rerank(kept, corpus)
+    stage('initial_rerank','done')
     recovery = cfg.abstracts
     if recovery.enabled and recovery.pre_rank_max_papers:
         chosen = recovery_shortlist(original, int(recovery.pre_rank_max_papers))
         context = RecoveryContext(deadline=monotonic() + int(recovery.pre_rank_seconds))
+        stage('recover_abstracts')
         recover_abstracts(chosen, recovery, context=context)
+        stage('recover_abstracts','done')
         for p in chosen:
             events.append({'id': paper_id(p), 'stage': 'recovery',
                            'reason': 'abstract_recovered' if p.abstract else 'abstract_still_missing'})
+        stage('rerank_recovered')
         original = ex.reranker.rerank(kept, corpus)
+        stage('rerank_recovered','done')
     # Capture a new real A snapshot; this does NOT recreate lost historic inputs.
     gold = {'order': [paper_id(p) for p in original],
             'rows': {paper_id(p): {f: getattr(p, f) for f in e.SCORE_FIELDS} for p in original}}
@@ -241,9 +372,11 @@ def _run_capture(private, payload, asof):
     extra = get_retriever_cls('arxiv')(extra_cfg)
     capture_version_metadata(extra)
     bind_arxiv_cutoff(extra, asof)
+    stage('retrieve_expanded',source='arxiv')
     expanded, extra_audit = collect(extra, 'arxiv', 'expanded')
     extra_audit.update(expanded_scope)
     attempts.append(extra_audit)
+    stage('retrieve_expanded','done',source='arxiv',attempts=attempts,expanded_candidates=len(expanded))
     known = {paper_id(p) for p in kept}
     aliases = set().union(*(paper_dois(p) for p in kept))
     rows += [row(p, 'expanded') for p in deduplicate(expanded)
@@ -260,12 +393,15 @@ def _run_capture(private, payload, asof):
     text += list(cfg.interest_profile.keywords)
     text += [c['task_description'] for c in payload['protocol']['C']['channels']]
     texts = list(dict.fromkeys(text))
+    stage('encode_snapshot',snapshot_texts=len(texts))
     vectors = ex.reranker._encode_texts(texts)
+    stage('encode_snapshot','done')
     encoder = ex.reranker._encoder
     resolved_revision = getattr(encoder[0].auto_model.config, '_commit_hash', None)
     if resolved_revision != e.REVISION:
         raise ValueError('resolved_model_revision_mismatch')
     model_snapshot = private / 'public_model' / 'hub' / ('models--' + e.MODEL.replace('/', '--')) / 'snapshots' / e.REVISION
+    stage('hash_model')
     artifact_hashes = {}
     for file in sorted(model_snapshot.rglob('*')):
         if file.is_file():
@@ -278,6 +414,7 @@ def _run_capture(private, payload, asof):
             artifact_hashes[str(file.relative_to(model_snapshot))] = h.hexdigest()
     if not artifact_hashes:
         raise ValueError('public_model_artifact_hashes_missing')
+    stage('hash_model','done',model_artifact_files=len(artifact_hashes))
     identity = {'model': cfg.reranker.local.model, 'revision': cfg.reranker.local.revision,
                 'resolved_revision': resolved_revision, 'artifact_files_sha256': artifact_hashes,
                 'dimension': int(vectors.shape[1]), 'backend': ex.reranker._backend,
@@ -299,7 +436,9 @@ def _run_capture(private, payload, asof):
                 'history': {'sha256': hashlib.sha256(history_file.read_bytes()).hexdigest(),
                             'commit': git_head(history_root)}, 'pending': pending,
                 'expected_A': gold, 'trace_completeness': 'item filtering traced; internal upstream retrieval coverage remains unknown'}
+    stage('evaluate_pools')
     result = e.evaluate(snapshot, pack, payload['protocol'], payload['exclusions'])
+    stage('evaluate_pools','done')
     result['capture_counts'] = {'zotero_before_filter': len(original_corpus), 'zotero_after_filter': len(corpus),
                                 'raw_candidates': len(raw), 'common_after_filters': len(kept)}
     result['source_configuration_sha256'] = e.digest(OmegaConf.to_container(cfg.source, resolve=False))
@@ -319,13 +458,27 @@ def main():
     private = Path(tempfile.mkdtemp(prefix='jina-offline-', dir=os.environ['RUNNER_TEMP']))
     result = {'status': 'blocked_before_inference', 'paid_calls': 0}
     protocol_hash = 'unavailable'
+    progress = None
+    cancelled_exit = False
+    previous_signals = {}
+    def cancel_signal(signum, frame):
+        raise CaptureCancelled()
     try:
+        progress = CaptureProgress(output)
+        for signum in (signal.SIGINT,signal.SIGTERM):
+            previous_signals[signum] = signal.signal(signum,cancel_signal)
         # Untrusted exception messages and all library progress stay off public logs.
         with open(os.devnull, 'w') as quiet, contextlib.redirect_stdout(quiet), contextlib.redirect_stderr(quiet):
+            progress.record(phase='validate')
             payload = validate_payload(json.loads(os.environ.pop('JINA_FULLPOOL_INPUT', '{}')))
             from seal import canonical
             protocol_hash = hashlib.sha256(canonical(payload['protocol'])).hexdigest()
-            result = run_capture(private, payload)
+            progress.protocol_hash = protocol_hash
+            progress.record('done',phase='validate')
+            result = run_capture(private, payload, progress)
+    except (CaptureCancelled,KeyboardInterrupt) as error:
+        result = {'status':'capture_cancelled','paid_calls':0,'error_type':type(error).__name__}
+        cancelled_exit = True
     except Exception as error:
         result = {'status': 'blocked_or_failed', 'paid_calls': 0, 'error_type': type(error).__name__}
         safe_codes = {'private_payload_keys', 'private_payload_unsupported_override',
@@ -346,14 +499,18 @@ def main():
         result['error_sites'] = [{'file': Path(x.filename).name, 'function': x.name, 'line': x.lineno}
                                  for x in traceback.extract_tb(error.__traceback__)[-4:]]
     finally:
-        from seal import seal
         try:
-            check_export(result)
-            envelope = seal(result, (PUBLIC / 'recipient.public.pem').read_bytes(), EXPERIMENT, protocol_hash)
-            output.write_text(json.dumps(envelope, separators=(',', ':')))
+            if progress:
+                progress.finish(result)
+            else:
+                write_sealed_atomic(output,result,protocol_hash)
         finally:
             shutil.rmtree(private, ignore_errors=True)
+            for signum,handler in previous_signals.items():
+                signal.signal(signum,handler)
     print(json.dumps({'status': result['status'], 'paid_calls': 0, 'sealed_result_saved': True}))
+    if cancelled_exit:
+        raise SystemExit(130)
 
 
 if __name__ == '__main__':

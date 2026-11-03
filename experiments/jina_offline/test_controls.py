@@ -88,7 +88,7 @@ class Guards(unittest.TestCase):
         self.assertEqual(set(config['jobs']), {'controls', 'isolated-jina'})
         job = config['jobs']['isolated-jina']
         self.assertEqual(job['timeout-minutes'], '45')
-        self.assertIn('experiment/jina-fullpool-20261102', job['if'])
+        self.assertIn('experiment/jina-timeout-diagnostics-20261103', job['if'])
         exports = [s['with'] for s in job['steps'] if s.get('uses') == 'actions/upload-artifact@v4']
         self.assertEqual(len(exports), 1)
         self.assertEqual(exports[0]['path'], 'sealed/result.sealed.json')
@@ -835,6 +835,296 @@ class DualPoolAndDisplay(unittest.TestCase):
         result['primary_blind_plan']['display_stages']['2'].append(plan['display_stages']['1'][0])
         with tempfile.TemporaryDirectory() as directory,self.assertRaisesRegex(ValueError,'fixed_display_partition'):
             e.write_staged_blind_csv(Path(directory),result,{'candidates':fixture.rows})
+
+
+class CaptureLifecycle(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        Guards.setUpClass()
+
+    def context(self):
+        from contextlib import ExitStack
+        stack=ExitStack();directory=Path(stack.enter_context(tempfile.TemporaryDirectory()))
+        (directory/'recipient.public.pem').write_bytes(Guards.public)
+        stack.enter_context(patch.object(a,'PUBLIC',directory))
+        stack.enter_context(patch.dict(os.environ,{'JINA_PROGRESS_FD':''}))
+        return stack,directory
+
+    def decrypt(self,path):return Guards().decrypt(json.loads(path.read_text()))
+
+    def test_encrypted_seed_exists_before_any_private_work(self):
+        stack,directory=self.context()
+        with stack:
+            out=directory/'result.sealed.json';cp=a.CaptureProgress(out,interval=0)
+            value=self.decrypt(out)
+            self.assertEqual(value['status'],'incomplete_checkpoint')
+            self.assertEqual(value['last_phase'],'startup')
+            self.assertFalse(value['baseline_verified']);self.assertFalse(value['blind_ready'])
+            self.assertEqual(value['counts'],{})
+            self.assertNotIn('last_phase',json.loads(out.read_text()))
+            cp.finish({'status':'blocked_before_inference','paid_calls':0})
+
+    def test_counts_and_source_detail_encrypted_public_progress_has_no_private_data(self):
+        import io
+        stack,directory=self.context()
+        with stack:
+            out=directory/'result.sealed.json';cp=a.CaptureProgress(out,interval=0)
+            stream=io.StringIO();cp.stream=stream
+            cp.protocol_hash='a'*64
+            attempts=[{'source':'arxiv','status':'failed','error':{'http_status':403,'query_sha256':'b'*64}}]
+            cp.record(phase='retrieve_common',source='arxiv',attempts=attempts,zotero_before_filter=895,retrieved_common=222)
+            body=self.decrypt(out)
+            self.assertEqual(body['counts']['zotero_before_filter'],895)
+            self.assertEqual(body['source_attempts'],attempts)
+            public=json.loads(stream.getvalue().splitlines()[-1])
+            self.assertEqual(set(public),{'phase','source','event','elapsed_seconds','sealed_checkpoint_saved'})
+            for key in ('counts','query_sha256','source_attempts','http_status'):self.assertNotIn(key,public)
+            cp.stream=None;stream.close();cp.finish({'status':'blocked_or_failed','paid_calls':0})
+
+    def test_atomic_replace_failure_preserves_previous_decryptable_checkpoint(self):
+        stack,directory=self.context()
+        with stack:
+            out=directory/'result.sealed.json';cp=a.CaptureProgress(out,interval=0)
+            previous=out.read_bytes()
+            with patch.object(a.os,'replace',side_effect=OSError('synthetic I/O')):
+                with self.assertRaises(OSError):cp.record(phase='zotero')
+            self.assertEqual(out.read_bytes(),previous)
+            self.assertEqual(self.decrypt(out)['last_phase'],'startup')
+            self.assertFalse(list(directory.glob('.checkpoint-*')))
+            cp.finish({'status':'blocked_or_failed','paid_calls':0})
+
+    def test_reject_untrusted_public_phase_or_counter_before_overwriting(self):
+        stack,directory=self.context()
+        with stack:
+            out=directory/'result.sealed.json';cp=a.CaptureProgress(out,interval=0)
+            previous=out.read_bytes()
+            for args in ({'phase':'synthetic-private-query'},{'phase':'zotero','private_notes':123},{'phase':'zotero','zotero_before_filter':-1}):
+                with self.assertRaisesRegex(ValueError,'unsafe_progress'):cp.record(**args)
+            self.assertEqual(previous,out.read_bytes())
+            cp.finish({'status':'blocked_or_failed','paid_calls':0})
+
+    def test_keyboard_interrupt_preserves_phase_and_non_success_status(self):
+        stack,directory=self.context()
+        with stack:
+            out=directory/'result.sealed.json'
+            def fake_capture(private,payload,progress):
+                progress.record(phase='initial_rerank',common_after_filters=120)
+                raise KeyboardInterrupt('synthetic-sensitive-message')
+            env={'RUNNER_TEMP':str(directory),'SEALED_OUTPUT':str(out),'JINA_FULLPOOL_INPUT':'{}'}
+            with patch.dict(os.environ,env),patch.object(a,'validate_payload',return_value={'protocol':{}}),patch.object(a,'run_capture',side_effect=fake_capture):
+                with self.assertRaises(SystemExit) as error:a.main()
+            self.assertEqual(error.exception.code,130)
+            value=self.decrypt(out)
+            self.assertEqual(value['status'],'capture_cancelled')
+            self.assertEqual(value['last_phase'],'initial_rerank')
+            self.assertFalse(value['baseline_verified']);self.assertFalse(value['blind_ready'])
+            self.assertNotIn('synthetic-sensitive-message',json.dumps(value))
+            self.assertFalse(list(directory.glob('jina-offline-*')))
+
+    def child(self,directory):
+        import subprocess
+        module_dir=str(Path(a.__file__).parent)
+        code=f'''import sys,time,os
+from pathlib import Path
+sys.path.insert(0,{module_dir!r})
+import actions_runner as a
+a.PUBLIC=Path({str(directory)!r})
+a.validate_payload=lambda x:{{'protocol':{{}}}}
+def fake(private,payload,progress):
+ progress.record(phase='initial_rerank',common_after_filters=120)
+ time.sleep(60)
+a.run_capture=fake
+a.main()
+'''
+        env=dict(os.environ,RUNNER_TEMP=str(directory),SEALED_OUTPUT=str(directory/'result.sealed.json'),JINA_FULLPOOL_INPUT='{}',JINA_PROGRESS_FD='')
+        return subprocess.Popen([sys.executable,'-c',code],env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+
+    def wait_phase(self,process,out,phase='initial_rerank'):
+        import time
+        deadline=time.monotonic()+5
+        while time.monotonic()<deadline:
+            if out.exists() and self.decrypt(out).get('last_phase')==phase:return
+            if process.poll() is not None:break
+            time.sleep(.02)
+        process.kill();process.communicate(timeout=3)
+        self.fail('synthetic worker did not reach checkpoint')
+
+    def test_cancellation_escapes_nested_sdk_and_collect_exception_handlers(self):
+        import http_diagnostics as d
+        caught=[]
+        def nested_sdk():
+            try:
+                try:raise a.CaptureCancelled()
+                except Exception:
+                    caught.append('inner_sdk')
+                    return []
+            except Exception:
+                caught.append('outer_sdk')
+                return []
+        with self.assertRaises(a.CaptureCancelled):
+            d.collect(SimpleNamespace(retrieve_papers=nested_sdk),'other','common')
+        self.assertEqual(caught,[])
+
+    def check_signal_at_nested_retrieval_boundary(self,signum,shell_entry=False):
+        import shlex,subprocess
+        stack,directory=self.context()
+        with stack:
+            module_dir=str(Path(a.__file__).parent)
+            code=f'''import os,sys,time
+from pathlib import Path
+from types import SimpleNamespace
+sys.path.insert(0,{module_dir!r})
+import actions_runner as a
+import http_diagnostics as d
+a.PUBLIC=Path({str(directory)!r})
+(a.PUBLIC/'entry_pid').write_text(str(os.getpid()))
+a.validate_payload=lambda x:{{'protocol':{{}}}}
+def fake(private,payload,progress):
+ def sdk():
+  try:
+   try:
+    progress.record(phase='retrieve_common',source='arxiv')
+    time.sleep(60)
+   except Exception:
+    (a.PUBLIC/'inner_handler_ran').touch()
+    return []
+  except Exception:
+   (a.PUBLIC/'outer_handler_ran').touch()
+   return []
+ d.collect(SimpleNamespace(retrieve_papers=sdk),'other','common')
+ (a.PUBLIC/'capture_continued').touch()
+ return {{'status':'synthetic_finished','paid_calls':0}}
+a.run_capture=fake
+a.main()
+'''
+            out=directory/'result.sealed.json'
+            env=dict(os.environ,RUNNER_TEMP=str(directory),SEALED_OUTPUT=str(out),JINA_FULLPOOL_INPUT='{}',JINA_PROGRESS_FD='3' if shell_entry else '')
+            command=[sys.executable,'-c',code]
+            if shell_entry:
+                script=directory/'capture-step.sh'
+                script.write_text('exec '+shlex.quote(sys.executable)+' -c '+shlex.quote(code)+' 3>&1 > /dev/null 2>&1\n')
+                command=['/bin/bash','--noprofile','--norc','-e','-o','pipefail',str(script)]
+            process=subprocess.Popen(command,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            try:
+                self.wait_phase(process,out,'retrieve_common')
+                self.assertEqual(int((directory/'entry_pid').read_text()),process.pid)
+                process.send_signal(signum)
+                stdout,stderr=process.communicate(timeout=5)
+                self.assertEqual(process.returncode,130,(stdout,stderr))
+                value=self.decrypt(out)
+                self.assertEqual(value['status'],'capture_cancelled')
+                self.assertEqual(value['error_type'],'CaptureCancelled')
+                self.assertEqual(value['last_phase'],'retrieve_common')
+                self.assertFalse(value['baseline_verified']);self.assertFalse(value['blind_ready'])
+                for name in ('inner_handler_ran','outer_handler_ran','capture_continued'):
+                    self.assertFalse((directory/name).exists(),name)
+                self.assertFalse(list(directory.glob('jina-offline-*')))
+            finally:
+                if process.poll() is None:
+                    process.kill();process.communicate(timeout=3)
+
+    def test_sigterm_escapes_nested_sdk_and_retrieval_boundary(self):
+        import signal
+        self.check_signal_at_nested_retrieval_boundary(signal.SIGTERM)
+
+    def test_sigint_escapes_nested_sdk_and_retrieval_boundary(self):
+        import signal
+        self.check_signal_at_nested_retrieval_boundary(signal.SIGINT)
+
+    def test_actions_bash_entry_sigint_reaches_python_and_preserves_checkpoint(self):
+        import signal
+        self.check_signal_at_nested_retrieval_boundary(signal.SIGINT,shell_entry=True)
+
+    def test_actions_bash_entry_sigterm_reaches_python_and_preserves_checkpoint(self):
+        import signal
+        self.check_signal_at_nested_retrieval_boundary(signal.SIGTERM,shell_entry=True)
+
+    def test_sigterm_writes_cancelled_checkpoint_and_cleans_private_temp(self):
+        import signal
+        stack,directory=self.context()
+        with stack:
+            process=self.child(directory);out=directory/'result.sealed.json';self.wait_phase(process,out)
+            process.send_signal(signal.SIGTERM);stdout,stderr=process.communicate(timeout=5)
+            self.assertEqual(process.returncode,130)
+            value=self.decrypt(out);self.assertEqual(value['status'],'capture_cancelled')
+            self.assertEqual(value['last_phase'],'initial_rerank')
+            self.assertFalse(value['blind_ready'])
+            self.assertFalse(list(directory.glob('jina-offline-*')))
+
+    def test_sigkill_leaves_valid_partial_ciphertext_without_fabricating_completion(self):
+        stack,directory=self.context()
+        with stack:
+            process=self.child(directory);out=directory/'result.sealed.json';self.wait_phase(process,out)
+            process.kill();process.communicate(timeout=5)
+            value=self.decrypt(out)
+            self.assertEqual(value['status'],'incomplete_checkpoint')
+            self.assertEqual(value['last_phase'],'initial_rerank')
+            self.assertEqual(value['counts']['common_after_filters'],120)
+            self.assertFalse(value['baseline_verified']);self.assertFalse(value['blind_ready'])
+
+    def test_heartbeat_encoder_wrapper_is_observational_and_finish_stops_thread(self):
+        import time
+        stack,directory=self.context()
+        with stack:
+            out=directory/'result.sealed.json';cp=a.CaptureProgress(out,interval=.01)
+            marker=object();calls=[]
+            def encode(texts,**kwargs):calls.append((texts,kwargs));time.sleep(.05);return marker
+            ranker=SimpleNamespace(_encode_texts=encode)
+            cp.trace_encoder(ranker);cp.record(phase='initial_rerank')
+            texts=['synthetic private reference text']
+            self.assertIs(ranker._encode_texts(texts,prompt_name='document'),marker)
+            self.assertEqual(calls,[(texts,{'prompt_name':'document'})])
+            body=self.decrypt(out)
+            self.assertTrue(any(event['event']=='heartbeat' for event in body['phase_events']))
+            self.assertFalse(body['counts']['encoder_present_at_entry'])
+            self.assertNotIn(texts[0],json.dumps(body))
+            cp.finish({'status':'synthetic_finished','paid_calls':0})
+            self.assertFalse(cp.thread.is_alive())
+            previous=out.read_bytes();time.sleep(.03);self.assertEqual(out.read_bytes(),previous)
+            self.assertEqual(self.decrypt(out)['status'],'synthetic_finished')
+
+    def test_dedicated_fd3_does_not_tee_raw_stdout_or_stderr(self):
+        import subprocess,shlex
+        stack,directory=self.context()
+        with stack:
+            module_dir=str(Path(a.__file__).parent)
+            code=f'''import sys,os
+from pathlib import Path
+sys.path.insert(0,{module_dir!r})
+import actions_runner as a
+a.PUBLIC=Path({str(directory)!r})
+cp=a.CaptureProgress(Path({str(directory/'result.sealed.json')!r}),interval=0)
+print('synthetic-sensitive-stdout')
+os.write(2,b'synthetic-sensitive-stderr')
+cp.record(phase='zotero',zotero_before_filter=895)
+cp.finish({{'status':'synthetic_finished','paid_calls':0}})
+'''
+            command=shlex.quote(sys.executable)+' -c '+shlex.quote(code)+' 3>&1 > /dev/null 2>&1'
+            result=subprocess.run(command,shell=True,executable='/bin/bash',env=dict(os.environ,JINA_PROGRESS_FD='3'),capture_output=True,timeout=5)
+            self.assertEqual(result.returncode,0)
+            for line in result.stdout.decode().splitlines():
+                value=json.loads(line)
+                self.assertLessEqual(set(value),{'phase','source','event','elapsed_seconds','sealed_checkpoint_saved'})
+            self.assertNotIn(b'synthetic-sensitive',result.stdout+result.stderr)
+            self.assertNotIn(b'zotero_before_filter',result.stdout)
+            self.assertEqual(self.decrypt(directory/'result.sealed.json')['status'],'synthetic_finished')
+
+    def test_step_time_budgets_leave_upload_and_cleanup_inside_45_minutes(self):
+        import yaml
+        path=Path(a.__file__).parents[2]/'.github/workflows/test.yml'
+        config=yaml.load(path.read_text(),Loader=yaml.BaseLoader);job=config['jobs']['isolated-jina']
+        self.assertEqual(job['timeout-minutes'],'45')
+        steps=job['steps'];self.assertEqual(sum(int(step['timeout-minutes']) for step in steps),44)
+        capture=next(s for s in steps if s.get('name')=='Capture and compare privately')
+        upload=next(s for s in steps if s.get('name')=='Retain ciphertext only')
+        self.assertEqual(capture['timeout-minutes'],'32')
+        self.assertEqual(capture['env']['JINA_PROGRESS_FD'],'3')
+        self.assertTrue(capture['run'].startswith('exec .venv/bin/python '))
+        self.assertIn('3>&1 > /dev/null 2>&1',capture['run'])
+        self.assertEqual(upload['if'],'${{ always() }}')
+        self.assertNotIn('cancelled',upload['if'])
+        self.assertEqual(upload['with']['path'],'sealed/result.sealed.json')
+        self.assertEqual(upload['with']['retention-days'],'1')
 
 
 if __name__ == '__main__':

@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   controls:
-    if: ${{ github.repository == 'wankiwi/zot2dailypaper' && github.ref == 'refs/heads/experiment/jina-fullpool-20261102' && inputs.mode == 'tests' }}
+    if: ${{ github.repository == 'wankiwi/zot2dailypaper' && github.ref == 'refs/heads/experiment/jina-timeout-diagnostics-20261103' && inputs.mode == 'tests' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -38,20 +38,23 @@ jobs:
           uv sync --frozen
           uv run --frozen python ../driver/experiments/jina_offline/test_controls.py
   isolated-jina:
-    if: ${{ github.repository == 'wankiwi/zot2dailypaper' && github.ref == 'refs/heads/experiment/jina-fullpool-20261102' && inputs.mode == 'jina_fullpool' }}
+    if: ${{ github.repository == 'wankiwi/zot2dailypaper' && github.ref == 'refs/heads/experiment/jina-timeout-diagnostics-20261103' && inputs.mode == 'jina_fullpool' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
+        timeout-minutes: 1
         with:
           path: driver
           persist-credentials: false
       - uses: actions/checkout@v6
+        timeout-minutes: 1
         with:
           ref: 339d0185fff0f67e7726eeb162462652e8669a38
           path: baseline
           persist-credentials: false
       - uses: actions/checkout@v6
+        timeout-minutes: 1
         with:
           ref: paper-state
           path: history
@@ -59,16 +62,20 @@ jobs:
           sparse-checkout: recommendations.json
           sparse-checkout-cone-mode: false
       - uses: astral-sh/setup-uv@v7
+        timeout-minutes: 1
         with:
           enable-cache: false
       - name: Install pinned baseline dependencies
+        timeout-minutes: 4
         working-directory: baseline
         run: uv sync --frozen
       - name: Capture and compare privately
+        timeout-minutes: 32
         working-directory: baseline
         env:
           BASELINE_ROOT: ${{ github.workspace }}/baseline
           HISTORY_ROOT: ${{ github.workspace }}/history
+          JINA_PROGRESS_FD: "3"
           SEALED_OUTPUT: ${{ github.workspace }}/sealed/result.sealed.json
           JINA_FULLPOOL_INPUT: ${{ secrets.JINA_FULLPOOL_INPUT }}
           ZOTERO_ID: ${{ secrets.ZOTERO_ID }}
@@ -76,9 +83,10 @@ jobs:
           OPENREVIEW_USERNAME: ${{ secrets.OPENREVIEW_USERNAME }}
           OPENREVIEW_PASSWORD: ${{ secrets.OPENREVIEW_PASSWORD }}
           OPENALEX_API_KEY: ${{ secrets.OPENALEX_API_KEY }}
-        run: uv run --frozen python ../driver/experiments/jina_offline/actions_runner.py > /dev/null 2>&1
+        run: exec .venv/bin/python ../driver/experiments/jina_offline/actions_runner.py 3>&1 > /dev/null 2>&1
       - name: Retain ciphertext only
-        if: ${{ always() && !cancelled() }}
+        if: ${{ always() }}
+        timeout-minutes: 3
         uses: actions/upload-artifact@v4
         with:
           name: jina-fullpool-sealed-${{ github.run_id }}
@@ -86,6 +94,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 1
       - name: Delete temporary runtime configuration
+        timeout-minutes: 1
         if: ${{ always() }}
         shell: python
         run: |

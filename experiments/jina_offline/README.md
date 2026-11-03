@@ -101,7 +101,7 @@ claim follows from partial labels. Must-read results are N/A if no label3 exists
 
 ## Future execution, after separate approval
 
-Proposed branch: `experiment/jina-fullpool-20261102`. The manual-only Test workflow
+Proposed branch: `experiment/jina-timeout-diagnostics-20261103`. The manual-only Test workflow
 has safe default `mode=tests` (synthetic controls, no private Secrets). A separately
 authorized `mode=jina_fullpool` may use one newly approved transient **data** Secret
 `JINA_FULLPOOL_INPUT` plus existing Zotero/OpenReview/OpenAlex credentials. This is
@@ -143,3 +143,57 @@ python experiments/jina_offline/offline_eval.py --export-evaluation result.priva
 
 The existing recipient key and encrypted one-day artifact flow are unchanged.
 This export is local/private; it is not an additional GitHub run or data upload.
+
+## Local timeout-diagnostics revision (not published or dispatched)
+
+Run 41556801480 reached the 45-minute job limit in the quiet capture step,
+confirmed by the GitHub UI; decoded logs alone only showed cancellation.
+It produced no artifact; its source/model phase and whether a final local file
+had briefly existed are unobservable. No scores or baseline completion are
+reconstructed from that failure.
+
+The local revision preserves the 45-minute job ceiling. Three checkouts and uv
+setup each have a 1-minute cap, dependency install has 4, capture 32, encrypted
+upload 3 and configuration cleanup 1 (44 total step-minutes, leaving a minute for
+ordinary runner overhead). This is an operational deadline, not a candidate,
+source, reference or ranking truncation. If dependency installation exceeds its
+4-minute limit, capture has not started and no encrypted seed exists, so there
+may still be no artifact. Other setup failures before capture have the same
+limitation; their public step failures remain visible.
+
+A valid encrypted seed precedes private work. Fixed stage transitions, encoder
+entry/exit metadata and30-second heartbeats atomically replace the encrypted
+checkpoint. Full source diagnostics and aggregate counts stay encrypted. Original
+stdout/stderr remain discarded. Only a dedicated inherited FD3 emits a small,
+fixed-schema JSON phase/event/elapsed/source heartbeat; it never tees raw output,
+queries, corpus/candidate counts, profile text, identifiers or ranking scores.
+The encoder wrapper forwards the original call exactly once without warming,
+batching differently or introducing extra inference texts.
+
+The shell uses `exec` so Python replaces bash as the step entry process. GitHub
+first sends cancellation SIGINT to that entry process, followed by SIGTERM and
+then a process-tree kill if it has not exited (see the official
+[cancellation reference](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-cancellation)).
+The dedicated cancellation exception derives from `BaseException`, so ordinary
+`except Exception` handlers in retrievers or SDKs cannot swallow it. Main handles
+it separately from source failures. SIGINT/SIGTERM handling preserves a cancelled
+checkpoint and exits 130; even a
+SIGKILL leaves the last fully written checkpoint because writing uses atomic
+replacement. Capture timeout leaves room for artifact upload and cleanup. Upload
+uses `always()` rather than excluding cancellation, retaining only the encrypted
+file for the existing one-day period. Incomplete checkpoints explicitly set
+`baseline_verified=false` and `blind_ready=false`; they are diagnostics, not
+completed A/B/C rankings. Normal completed results keep their genuine validation
+fields and receive separate timing metadata.
+
+Offline tests simulate blocked work, SIGINT/SIGTERM through nested SDK and source
+collector error handlers, the Actions-style bash entry, SIGKILL, interrupted writes, safe
+FD3 versus raw stdout/stderr, heartbeat shutdown and workflow time budgets. They
+do not establish live performance or guarantee recovery after host loss, forced
+workflow termination or artifact-service failure. No software change can recover
+the missing artifact from the prior run. The scoring code, C protocol, source/date
+policy, sample seed and private input remain unchanged. Another actual execution
+requires separate approval; this revision makes no publish or dispatch request.
+If approved, the next run is a diagnostics run: it may produce complete A/B/C
+results, but the 32-minute capture budget is a retention safeguard, not a speed
+fix or a promise to deliver a blind-evaluation pool.
