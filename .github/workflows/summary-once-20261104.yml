@@ -1,0 +1,56 @@
+name: One-shot summary validation 20261104
+on:
+  push:
+    branches: ['fix/summary-smoke-20261104']
+    paths: ['.github/workflows/summary-once-20261104.yml']
+permissions:
+  contents: read
+concurrency:
+  group: daily-papers
+  cancel-in-progress: false
+jobs:
+  guarded-summary:
+    if: >-
+      ${{ github.repository == 'wankiwi/zot2dailypaper' &&
+          github.ref == 'refs/heads/fix/summary-smoke-20261104' &&
+          github.event_name == 'push' &&
+          github.event.before == '70aab0a95d9998f7735a652d0b98dde3802c2c9d' &&
+          github.event.head_commit.message == 'Run one guarded public summary check 20261104-a' &&
+          github.run_attempt == 1 }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write # Existing whole-day budget claim only; no delivery writes.
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+      - name: Install locked dependencies
+        run: uv sync --frozen
+      - name: Run isolated summary and budget regression tests
+        run: >-
+          uv run --frozen pytest
+          tests/test_llm_smoke_preflight.py tests/test_llm_validation.py
+          tests/test_openai_summary.py tests/test_budget.py
+          tests/test_budget_local_day.py tests/test_llm_status.py
+      - name: Validate at most one public summary without delivery
+        env:
+          CUSTOM_CONFIG: ${{ vars.CUSTOM_CONFIG }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          uv run --frozen python - <<'PY'
+          from decimal import Decimal
+          import os
+          from pathlib import Path
+          import runpy
+          from omegaconf import OmegaConf
+          cfg = OmegaConf.merge(
+              OmegaConf.load('config/base.yaml').llm,
+              OmegaConf.create(os.environ['CUSTOM_CONFIG']).llm)
+          assert cfg.enabled is True, 'LLM must already be enabled'
+          assert cfg.api.base_url == 'https://api.openai.com/v1', 'Official route required'
+          assert cfg.generation_kwargs.model == 'gpt-6-luna', 'Reviewed model required'
+          assert cfg.budget.enabled is True, 'Existing budget guard required'
+          assert Decimal(str(cfg.budget.daily_cny)) == Decimal('0.30'), 'Existing CNY allowance required'
+          assert cfg.budget.timezone == 'Asia/Singapore', 'Existing budget timezone required'
+          runpy.run_path(str(Path('scripts/validate_llm.py')), run_name='__main__')
+          PY
