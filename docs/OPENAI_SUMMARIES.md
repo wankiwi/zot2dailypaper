@@ -65,3 +65,23 @@ Sources:
 - https://developers.openai.com/api/docs/pricing
 - https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html
 - https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml
+
+
+## Raw Markdown pricing compatibility
+
+The public Markdown export groups short- and long-context rates in an eleven-column
+row, unlike the six-column visible-page table. The parser accepts these two exact
+reviewed schemas only. Both forms require the exact Standard, Batch, Flex and Fast headings, complete
+model rows, USD units and ordered cache rates. Expanded rows validate both context
+groups. Missing, duplicated or unknown tiers/columns and mixed table schemas fail
+closed rather than silently applying the seed. A legacy Batch-only table cannot
+substitute discount rates for the Standard requests. The admission code independently
+checks that the input bound remains within the reviewed 272,000-token short-context
+boundary. Its actual bound remains 1,152 input tokens, so short-context maxima
+preserve the existing USD0.50/1.00 reserve ceiling and CNY0.30 daily limit.
+
+The expanded public source was inspected on 2026-11-04 in Actions run
+41776433387; full-source SHA256 was
+`842ac0dce2324251d274026d197a81473e72ff40eef1194bdd4e6b32833d8f55`.
+Only public pricing structure was logged. Production budget warnings retain safe
+machine-readable quote failure codes, without provider bodies or credentials.
