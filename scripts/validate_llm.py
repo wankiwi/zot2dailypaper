@@ -8,8 +8,28 @@ import httpx
 from omegaconf import OmegaConf
 from openai import OpenAI, APIStatusError
 
-from zot2dailypaper.budget import budget_plan, prepare_budget, git
-from zot2dailypaper.state import load_paper
+from zot2dailypaper.budget import BudgetUnavailable, budget_plan, prepare_budget, git
+from zot2dailypaper.openai_pricing import QuoteUnavailable
+from zot2dailypaper.protocol import Paper
+
+
+def public_example():
+    # A fixed public abstract excerpt, independent of private recommendations.
+    # Twenty words from https://arxiv.org/abs/1706.03762v7, checked 2026-11-04.
+    return Paper(source='arxiv', title='Attention Is All You Need', authors=[],
+                 abstract='We propose a new simple network architecture, the Transformer, based solely on attention mechanisms, dispensing with recurrence and convolutions entirely.',
+                 url='https://arxiv.org/abs/1706.03762v7')
+
+
+def safe_budget_failure(exc, events):
+    report = {'status': 'blocked_before_paid', 'error_type': type(exc).__name__,
+              'reason': exc.reason, 'paid_request_count': len(events)}
+    # Only emit one of this module's machine codes; never exception bodies from
+    # providers, credentials, private configuration, or returned document text.
+    context = exc.__context__
+    if isinstance(context, QuoteUnavailable) and re.fullmatch(r'[a-z][a-z0-9_]{0,95}', str(context)):
+        report['quote_error'] = str(context)
+    return report
 
 
 def request_audit(events):
@@ -31,6 +51,12 @@ def response_audit(events):
             for key in ('prompt_tokens', 'completion_tokens', 'total_tokens'):
                 if type(usage.get(key)) is int:
                     event[key] = usage[key]
+            for target, group, key in (
+                    ('cached_input_tokens', 'prompt_tokens_details', 'cached_tokens'),
+                    ('reasoning_tokens', 'completion_tokens_details', 'reasoning_tokens')):
+                details = usage.get(group) or {}
+                if isinstance(details, dict) and type(details.get(key)) is int:
+                    event[target] = details[key]
         except (ValueError, TypeError, AttributeError):
             pass
     return observe
@@ -60,7 +86,8 @@ def validate(config, paper, client, events):
             'sentence_count': sentences if generated else 0,
             'summary_characters': len(paper.tldr or '') if generated else 0,
             'original_abstract_preserved': preserved, 'paid_request_count': len(events),
-            'usage': events, 'reserved_day': guard.day}
+            'usage': events, 'reserved_day': guard.day,
+            'cost_report': list(guard.api_costs.lines())}
 
 
 def state_snapshot():
@@ -69,8 +96,7 @@ def state_snapshot():
         raise ValueError('Existing delivery state required')
     git('fetch', '--no-tags', '--no-write-fetch-head', 'origin', ref[0])
     blob = git('rev-parse', f'{ref[0]}:recommendations.json').decode()
-    state = json.loads(git('show', f'{ref[0]}:recommendations.json'))
-    return blob, state
+    return blob  # Verify only the blob identity; do not read private delivery contents.
 
 
 def main():
@@ -82,26 +108,30 @@ def main():
         supplied = OmegaConf.create(os.environ['CUSTOM_CONFIG']).llm
         config = OmegaConf.merge(base, supplied)
         budget_plan(config)
-        before, state = state_snapshot()
-        papers = [record for record in state['records'].values()
-                  if record.get('channels', {}).get('email') and record['paper'].get('abstract')]
-        paper = load_paper(max(papers, key=lambda record: record['added'])['paper'])
+        before = state_snapshot()
+        paper = public_example()
         with httpx.Client(follow_redirects=False, event_hooks={
                 'request': [request_audit(events)], 'response': [response_audit(events)]}) as transport:
             with OpenAI(api_key=config.api.key, base_url=config.api.base_url,
                         max_retries=0, timeout=60, http_client=transport) as client:
                 report = validate(config, paper, client, events)
-        after, _ = state_snapshot()
+        # This fixed example is public and unrelated to personal rankings.
+        report['public_example_url'] = paper.url
+        if report['status'] == 'success':
+            report['generated_summary'] = paper.tldr
+        after = state_snapshot()
         report['delivery_state_unchanged'] = before == after
         if before != after:
             report['status'] = 'delivery_state_changed_concurrently'
+    except BudgetUnavailable as exc:
+        report = safe_budget_failure(exc, events)
     except APIStatusError as exc:
         report = {'status': 'provider_rejected', 'http_status': exc.status_code,
                   'paid_request_count': len(events)}
     except Exception as exc:
         report = {'status': 'validation_failed', 'error_type': type(exc).__name__,
                   'paid_request_count': len(events)}
-    print(json.dumps(report, ensure_ascii=False))  # No paper text, IDs, credentials or provider bodies.
+    print(json.dumps(report, ensure_ascii=False))  # Only fixed public example output, safe codes and usage.
     return 0 if report['status'] == 'success' else 1
 
 
