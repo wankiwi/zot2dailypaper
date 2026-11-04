@@ -52,7 +52,7 @@ def parse_prices(text):
                         for context in ('short','long') for column in columns]]
     header=None
     tier=None
-    rates=[]; expanded_tiers=set()
+    rates=[]; tiers=set(); schema=None
     headings={'### Standard pricing data':'standard',
               '### Batch pricing data':'batch','#### Batch':'batch',
               '#### Flex':'flex','### Fast pricing data':'fast'}
@@ -73,17 +73,20 @@ def parse_prices(text):
                 raise QuoteUnavailable('openai_price_columns_changed')
             if len(cells)!=len(header) or not all(re.fullmatch(r'\$\d+(?:\.\d+)?',x) for x in cells[1:]):
                 raise QuoteUnavailable('openai_price_format_changed')
+            if tier not in ('standard','batch','flex','fast') or tier in tiers:
+                raise QuoteUnavailable('openai_price_tier_changed')
+            if schema is not None and schema!=header:
+                raise QuoteUnavailable('openai_price_schema_mixed')
+            schema=header
+            tiers.add(tier)
             values=list(map(lambda x:_number(x[1:]),cells[1:]))
             for start in range(0,len(values),5):
                 inputs,outputs,cached,write30,write12=values[start:start+5]
                 if not cached<=inputs<=write30<=write12:
                     raise QuoteUnavailable('openai_cache_price_order_changed')
             if header==expanded:
-                if tier not in ('standard','batch','flex','fast') or tier in expanded_tiers:
-                    raise QuoteUnavailable('openai_price_tier_changed')
                 if any(long<short for short,long in zip(values[:5],values[5:])):
                     raise QuoteUnavailable('openai_context_price_order_changed')
-                expanded_tiers.add(tier)
             # The admitted request is <=1152 input tokens. budget_plan also
             # enforces the reviewed short-context boundary before using this
             # quote. Validate both groups; never mix long and short columns.
@@ -91,7 +94,7 @@ def parse_prices(text):
             rates.append((max(inputs,write30,write12),outputs))
     if not rates:
         raise QuoteUnavailable('exact_openai_price_row_missing')
-    if expanded_tiers and expanded_tiers!={'standard','batch','flex','fast'}:
+    if tiers!={'standard','batch','flex','fast'}:
         raise QuoteUnavailable('openai_price_tiers_incomplete')
     return {'input_usd_per_million':str(max(x[0] for x in rates)),
             'output_usd_per_million':str(max(x[1] for x in rates))}

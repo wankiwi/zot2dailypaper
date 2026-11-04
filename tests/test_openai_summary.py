@@ -11,11 +11,30 @@ from tests.canned_responses import make_chat_response,make_sample_paper
 from tests.test_budget import make_git
 
 PRICE='''Prices per 1M tokens.
-| Model | Input | Output | Cached input | 30m write | 12h write |
+
+### Standard pricing data
+
+| Model | input | output | cached input | 30m write | 12h write |
 | --- | --- | --- | --- | --- | --- |
 | gpt-6-luna | $0.10 | $0.50 | $0.01 | $0.125 | $0.25 |
 
-| Model | Input | Output | Cached input | 30m write | 12h write |
+### Batch pricing data
+
+#### Batch
+
+| Model | input | output | cached input | 30m write | 12h write |
+| --- | --- | --- | --- | --- | --- |
+| gpt-6-luna | $0.05 | $0.25 | $0.005 | $0.0625 | $0.125 |
+
+#### Flex
+
+| Model | input | output | cached input | 30m write | 12h write |
+| --- | --- | --- | --- | --- | --- |
+| gpt-6-luna | $0.05 | $0.25 | $0.005 | $0.0625 | $0.125 |
+
+### Fast pricing data
+
+| Model | input | output | cached input | 30m write | 12h write |
 | --- | --- | --- | --- | --- | --- |
 | gpt-6-luna | $0.20 | $1.00 | $0.02 | $0.25 | $0.50 |
 '''

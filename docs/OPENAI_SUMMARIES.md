@@ -71,10 +71,11 @@ Sources:
 
 The public Markdown export groups short- and long-context rates in an eleven-column
 row, unlike the six-column visible-page table. The parser accepts these two exact
-reviewed schemas only. For the expanded form it requires the exact Standard,
-Batch, Flex and Fast headings, complete model rows, USD units and ordered cache
-rates in both context groups. Missing, duplicated or unknown tiers/columns fail
-closed rather than silently applying the seed. The admission code independently
+reviewed schemas only. Both forms require the exact Standard, Batch, Flex and Fast headings, complete
+model rows, USD units and ordered cache rates. Expanded rows validate both context
+groups. Missing, duplicated or unknown tiers/columns and mixed table schemas fail
+closed rather than silently applying the seed. A legacy Batch-only table cannot
+substitute discount rates for the Standard requests. The admission code independently
 checks that the input bound remains within the reviewed 272,000-token short-context
 boundary. Its actual bound remains 1,152 input tokens, so short-context maxima
 preserve the existing USD0.50/1.00 reserve ceiling and CNY0.30 daily limit.

@@ -63,3 +63,29 @@ def test_safe_parser_error_survives_production_budget_message(config, monkeypatc
     with pytest.raises(budget.BudgetUnavailable, match='openai_price_columns_changed') as error:
         budget.budget_plan(official(config))
     assert error.value.reason == 'billing_unverified'
+
+LEGACY = "Prices per 1M tokens.\n\n### Standard pricing data\n\n| Model | input | output | cached input | 30m write | 12h write |\n| --- | --- | --- | --- | --- | --- |\n| gpt-6-luna | $0.10 | $0.50 | $0.01 | $0.125 | $0.25 |\n\n### Batch pricing data\n\n#### Batch\n\n| Model | input | output | cached input | 30m write | 12h write |\n| --- | --- | --- | --- | --- | --- |\n| gpt-6-luna | $0.05 | $0.25 | $0.005 | $0.0625 | $0.125 |\n\n#### Flex\n\n| Model | input | output | cached input | 30m write | 12h write |\n| --- | --- | --- | --- | --- | --- |\n| gpt-6-luna | $0.05 | $0.25 | $0.005 | $0.0625 | $0.125 |\n\n### Fast pricing data\n\n| Model | input | output | cached input | 30m write | 12h write |\n| --- | --- | --- | --- | --- | --- |\n| gpt-6-luna | $0.20 | $1.00 | $0.02 | $0.25 | $0.50 |\n"
+LEGACY_FAST = LEGACY[LEGACY.index('### Fast pricing data'):]
+BATCH_ONLY = 'Prices per 1M tokens.\n\n' + LEGACY[LEGACY.index('### Batch pricing data'):LEGACY.index('#### Flex')]
+
+def test_legacy_schema_requires_complete_labeled_tiers():
+    assert prices.parse_prices(LEGACY) == {
+        'input_usd_per_million': '0.50', 'output_usd_per_million': '1.00'}
+
+@pytest.mark.parametrize('bad', [
+    BATCH_ONLY,
+    '\n'.join(line for line in LEGACY.splitlines() if not line.startswith('#')),
+    LEGACY.replace(LEGACY_FAST, ''),
+    LEGACY + '\n' + LEGACY_FAST,
+    LEGACY.replace('### Fast pricing data', '### Discount pricing data'),
+    RAW.replace(FAST, LEGACY_FAST),
+])
+def test_legacy_discount_missing_ambiguous_and_mixed_tiers_fail_closed(bad):
+    with pytest.raises(prices.QuoteUnavailable):
+        prices.parse_prices(bad)
+
+def test_reachable_batch_only_never_uses_seed_fallback(monkeypatch):
+    monkeypatch.setattr(prices, '_quotes', {})
+    monkeypatch.setattr(prices, '_fetch', lambda url: BATCH_ONLY)
+    with pytest.raises(prices.QuoteUnavailable, match='tiers_incomplete'):
+        prices.quote('2026-11-04')
