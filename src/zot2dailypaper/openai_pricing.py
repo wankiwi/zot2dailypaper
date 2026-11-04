@@ -22,6 +22,7 @@ SEED = {'price_date':'2026-11-02','input_usd_per_million':'0.50',
         'output_usd_per_million':'1.00','fx_date':'2026-10-30',
         'usd_per_eur':'1.1172','cny_per_eur':'7.4326'}
 MAX_AGE_DAYS = 7
+SHORT_CONTEXT_TOKEN_CEILING = 272000
 _lock = Lock()
 _quotes = {}
 
@@ -45,26 +46,53 @@ def parse_prices(text):
     # accept a discount-only row. Take maxima across all published modes.
     if not re.search(r'Prices per 1M tokens\.',text):
         raise QuoteUnavailable('openai_price_units_changed')
-    expected=['model','input','output','cached input','30m write','12h write']
-    header=False
-    rates=[]
+    columns=['input','output','cached input','30m write','12h write']
+    expected=['model',*columns]
+    expanded=['model',*[f'{context} context {column}'
+                        for context in ('short','long') for column in columns]]
+    header=None
+    tier=None
+    rates=[]; expanded_tiers=set()
+    headings={'### Standard pricing data':'standard',
+              '### Batch pricing data':'batch','#### Batch':'batch',
+              '#### Flex':'flex','### Fast pricing data':'fast'}
     for line in text.splitlines():
+        stripped=line.strip()
+        if stripped.startswith('#'):
+            tier=headings.get(stripped)
         if not line.strip().startswith('|'):
-            header=False
+            header=None
             continue
         cells=[x.strip().strip('`') for x in line.strip().strip('|').split('|')]
-        if [x.casefold() for x in cells]==expected:
-            header=True
+        normalized=[x.casefold() for x in cells]
+        if cells and normalized[0]=='model':
+            header=normalized if normalized in (expected,expanded) else None
             continue
-        if header and cells and cells[0]==MODEL:
-            if len(cells)!=6 or not all(re.fullmatch(r'\$\d+(?:\.\d+)?',x) for x in cells[1:]):
+        if cells and cells[0]==MODEL:
+            if header is None:
+                raise QuoteUnavailable('openai_price_columns_changed')
+            if len(cells)!=len(header) or not all(re.fullmatch(r'\$\d+(?:\.\d+)?',x) for x in cells[1:]):
                 raise QuoteUnavailable('openai_price_format_changed')
-            inputs,outputs,cached,write30,write12=map(lambda x:_number(x[1:]),cells[1:])
-            if not cached<=inputs<=write30<=write12:
-                raise QuoteUnavailable('openai_cache_price_order_changed')
+            values=list(map(lambda x:_number(x[1:]),cells[1:]))
+            for start in range(0,len(values),5):
+                inputs,outputs,cached,write30,write12=values[start:start+5]
+                if not cached<=inputs<=write30<=write12:
+                    raise QuoteUnavailable('openai_cache_price_order_changed')
+            if header==expanded:
+                if tier not in ('standard','batch','flex','fast') or tier in expanded_tiers:
+                    raise QuoteUnavailable('openai_price_tier_changed')
+                if any(long<short for short,long in zip(values[:5],values[5:])):
+                    raise QuoteUnavailable('openai_context_price_order_changed')
+                expanded_tiers.add(tier)
+            # The admitted request is <=1152 input tokens. budget_plan also
+            # enforces the reviewed short-context boundary before using this
+            # quote. Validate both groups; never mix long and short columns.
+            inputs,outputs,cached,write30,write12=values[:5]
             rates.append((max(inputs,write30,write12),outputs))
     if not rates:
         raise QuoteUnavailable('exact_openai_price_row_missing')
+    if expanded_tiers and expanded_tiers!={'standard','batch','flex','fast'}:
+        raise QuoteUnavailable('openai_price_tiers_incomplete')
     return {'input_usd_per_million':str(max(x[0] for x in rates)),
             'output_usd_per_million':str(max(x[1] for x in rates))}
 

@@ -94,16 +94,19 @@ def budget_plan(config, *, with_pricing=False):
         raise BudgetUnavailable('Endpoint is not a valid verified HTTPS origin') from exc
     official = base.hostname == 'api.openai.com'
     if official:
-        from .openai_pricing import MODEL, quote, QuoteUnavailable
+        from .openai_pricing import MODEL, quote, QuoteUnavailable, SHORT_CONTEXT_TOKEN_CEILING
         if (base.scheme != 'https' or port not in (None,443) or base.path.rstrip('/') != '/v1'
                 or base.query or base.fragment or base.username or base.password):
             raise BudgetUnavailable('Endpoint does not match the verified OpenAI origin')
         if config.generation_kwargs.get('model') != MODEL:
             raise BudgetUnavailable('Model does not match the verified OpenAI pricing record')
+        if PROMPT_BYTES + SYSTEM_BYTES + FRAMING_TOKENS > SHORT_CONTEXT_TOKEN_CEILING:
+            raise BudgetUnavailable('Request bound exceeds reviewed short-context pricing', reason='billing_unverified')
         try:
             pricing = quote(utc_day())
-        except QuoteUnavailable:
-            raise BudgetUnavailable('OpenAI price/FX quote unavailable or expired; original abstract retained',
+        except QuoteUnavailable as exc:
+            code = str(exc) if re.fullmatch(r'[a-z][a-z0-9_]{0,95}', str(exc)) else 'invalid_public_quote'
+            raise BudgetUnavailable(f'OpenAI price/FX quote unavailable or expired ({code}); original abstract retained',
                                     reason='billing_unverified') from None
     else:
         if VERIFIED_PRICING is None:
