@@ -3,90 +3,78 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Isolated tests, OpenReview checks, or one guarded paid LLM summary (no email)
+        description: Public-source capture only; no Zotero, model inference or email
         type: choice
-        options: [tests, openreview, openreview_full, llm, zotero_readonly]
+        options: [tests, public_sources]
         default: tests
-      collection_name_sha256:
-        description: SHA256 of the exact target collection name (read-only inspection)
-        type: string
-        default: ''
 permissions:
   contents: read
 jobs:
-  isolated-tests:
+  source-controls:
     if: ${{ inputs.mode == 'tests' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v7
-      - name: Install locked dependencies
-        run: uv sync --frozen
-      - name: Run isolated tests without delivery credentials
-        run: uv run --frozen pytest
-  openreview-validation:
-    if: ${{ inputs.mode == 'openreview' || inputs.mode == 'openreview_full' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v6
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@v7
       - name: Install locked dependencies
         run: uv sync --frozen
-      - name: Validate official login and public submissions only
+      - name: Offline controls only
         env:
+          PYTHONPATH: src
+        run: uv run --frozen python -m unittest discover -s experiments/jina_blind_sources -p 'test_*.py'
+  public-source-capture:
+    if: ${{ inputs.mode == 'public_sources' && github.ref == 'refs/heads/experiment/jina-blind-source-20261104' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    concurrency:
+      group: jina-blind-public-source-20261104
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        timeout-minutes: 1
+        with:
+          persist-credentials: false
+      - name: Read existing delivery identities
+        uses: actions/checkout@v6
+        timeout-minutes: 1
+        with:
+          ref: paper-state
+          path: history_readonly
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        timeout-minutes: 1
+      - name: Install locked dependencies
+        timeout-minutes: 4
+        run: uv sync --frozen
+      - name: Offline controls without service credentials
+        timeout-minutes: 1
+        env:
+          PYTHONPATH: src
+        run: uv run --frozen python -m unittest discover -s experiments/jina_blind_sources -p 'test_*.py'
+      - name: Capture public metadata and seal checkpoints
+        timeout-minutes: 32
+        env:
+          JINA_BLIND_SOURCE_INPUT: ${{ secrets.JINA_BLIND_SOURCE_INPUT }}
           OPENREVIEW_USERNAME: ${{ secrets.OPENREVIEW_USERNAME }}
           OPENREVIEW_PASSWORD: ${{ secrets.OPENREVIEW_PASSWORD }}
-        run: |
-          if [ "${{ inputs.mode }}" = "openreview_full" ]; then
-            uv run --frozen python scripts/diagnose_openreview.py
-          else
-            uv run --frozen python scripts/validate_openreview.py
-          fi
-  llm-validation:
-    if: ${{ inputs.mode == 'llm' }}
-    concurrency:
-      group: daily-papers
-      cancel-in-progress: false
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: write # Only the durable daily budget and public pricing receipt are updated.
-    steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v7
-      - name: Install locked dependencies
-        run: uv sync --frozen
-      - name: Restore last verified LLM pricing
-        run: uv run --frozen python scripts/workflow_state.py restore-pricing
-      - name: Validate one Chinese summary without delivery
-        env:
-          CUSTOM_CONFIG: ${{ vars.CUSTOM_CONFIG }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: uv run --frozen python scripts/validate_llm.py
-      - name: Preserve verified LLM pricing
-        if: ${{ always() && !cancelled() }}
-        run: uv run --frozen python scripts/workflow_state.py save-pricing
-
-  zotero-readonly-inspection:
-    if: ${{ inputs.mode == 'zotero_readonly' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v6
+          OPENALEX_API_KEY: ${{ secrets.OPENALEX_API_KEY }}
+          HISTORY_FILE: ${{ github.workspace }}/history_readonly/recommendations.json
+          SEALED_OUTPUT: ${{ github.workspace }}/sealed/public-sources.sealed.json
+          PYTHONPATH: src
+        run: exec .venv/bin/python experiments/jina_blind_sources/capture_public.py 3>&1 > /dev/null 2>&1
+      - name: Preserve ciphertext only
+        if: ${{ always() }}
+        timeout-minutes: 3
+        uses: actions/upload-artifact@v4
         with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@v7
-      - name: Install locked dependencies
-        run: uv sync --frozen
-      - name: Read permission names and target collection existence only
-        env:
-          ZOTERO_KEY: ${{ secrets.ZOTERO_KEY }}
-          ZOTERO_ID: ${{ secrets.ZOTERO_ID }}
-          TARGET_COLLECTION_SHA256: ${{ inputs.collection_name_sha256 }}
-        run: uv run --frozen python scripts/inspect_zotero_access.py
+          name: jina-blind-public-sealed-${{ github.run_id }}
+          path: sealed/public-sources.sealed.json
+          if-no-files-found: warn
+          retention-days: 1
+      - name: Remove throwaway local delivery-history checkout
+        if: ${{ always() }}
+        timeout-minutes: 1
+        run: rm -rf history_readonly
