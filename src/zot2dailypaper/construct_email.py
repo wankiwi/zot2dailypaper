@@ -1,6 +1,7 @@
 """Table-based email cards inspired by TideDra/zotero-arxiv-daily."""
 from .protocol import Paper
 from .zotero_action import confirmation_origin, confirmation_link
+from .recommendation_sync import MAX_CITATION_AUTHORS, WORKER_ORIGIN
 from .budget import pricing_warning
 from .api_costs import ApiCosts
 from .selection import GROUPS, paper_group
@@ -95,12 +96,14 @@ __CONTENT__
 
 
 def get_block_html(title, authors, rate, tldr, pdf_url, affiliations=None, summary_label='AI summary',
-                   *, number=None, metadata='', basis='abstract', article_url=None, doi=None, original_abstract=None, zotero_url=None, interest_reference="your library"):
+                   *, number=None, metadata='', basis='abstract', article_url=None, doi=None, original_abstract=None, zotero_url=None, zotero_notice='', interest_reference="your library"):
     ordinal = f'{number}. ' if number is not None else ''
     heading = escape(ordinal + title)
     details = escape(metadata)
     buttons = link('PDF', pdf_url, True) + link('Article', article_url, not safe_url(pdf_url))
     buttons += link('保存到 Zotero', zotero_url)
+    save_notice = (f'<p style="font-family:Aptos,Calibri,Arial,Helvetica,sans-serif;margin:10px 0 0;font-size:12px;line-height:1.6;color:#713f12;">'
+                   f'{escape(zotero_notice)}</p>') if zotero_notice else ''
     doi_url = 'https://doi.org/' + quote(doi, safe='/') if doi else None
     doi_line = (f'<p style="font-family:Aptos,Calibri,Arial,Helvetica,sans-serif;margin:10px 0 0;font-size:12px;overflow-wrap:anywhere;word-break:break-word;">'
                 f'<a style="font-family:Aptos,Calibri,Arial,Helvetica,sans-serif;color:#526174;" href="{escape(doi_url, quote=True)}">DOI: {escape(doi)}</a></p>') if doi else ''
@@ -118,7 +121,7 @@ def get_block_html(title, authors, rate, tldr, pdf_url, affiliations=None, summa
 <p style="font-family:Aptos,Calibri,Arial,Helvetica,sans-serif;margin:0 0 18px;font-size:14px;line-height:1.7;color:#8e302c;"><strong>Relevance: {escape(str(rate))}/100</strong>{basis_note}</p>
 <p style="font-family:Aptos,Calibri,Arial,Helvetica,sans-serif;margin:0 0 8px;font-size:12px;font-weight:bold;color:#526174;">{escape(summary_label)}</p>
 <p style="font-family:Aptos,Calibri,Arial,Helvetica,sans-serif;margin:0 0 18px;font-size:15px;line-height:1.8;color:#334155;">{escape(tldr or 'No abstract available').replace(chr(10), '<br>')}</p>
-<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="font-family:Aptos,Calibri,Arial,Helvetica,sans-serif;"><tr><td style="font-family:Aptos,Calibri,Arial,Helvetica,sans-serif;">{buttons}</td></tr></table>{doi_line}
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="font-family:Aptos,Calibri,Arial,Helvetica,sans-serif;"><tr><td style="font-family:Aptos,Calibri,Arial,Helvetica,sans-serif;">{buttons}</td></tr></table>{save_notice}{doi_line}
 </td></tr></table>'''
 
 
@@ -266,10 +269,17 @@ def render_email(papers: list[Paper], *, affiliation_max_chars=180, zotero_actio
             if p.selection_score is not None and p.score is not None and p.selection_score != p.score:
                 metadata += f' · Selected at relevance {p.selection_score:.1f}/100; updated after abstract recovery'
             summary, summary_label = email_summary(p)
+            zotero_url = confirmation_link(p, zotero_action_origin)
+            zotero_notice = ''
+            if zotero_action_origin == WORKER_ORIGIN and len(p.authors) > MAX_CITATION_AUTHORS:
+                zotero_url = None
+                zotero_notice = (f'保存到 Zotero 暂不可用 / Zotero save unavailable: {len(p.authors)} authors exceed '
+                                 f'the {MAX_CITATION_AUTHORS}-author limit. No authors were removed from the saved '
+                                 'recommendation. Open Article to import the full citation with Zotero.')
             block = get_block_html(p.title, ', '.join(authors) or metadata_label(p, 'authors'), round(p.score, 1) if p.score is not None else 'Unknown',
                                    summary, p.pdf_url, affiliations or metadata_label(p, 'affiliations'), summary_label, number=number,
                                    metadata=metadata, basis=p.scoring_basis, article_url=p.url, doi=p.doi,
-                                   zotero_url=confirmation_link(p, zotero_action_origin))
+                                   zotero_url=zotero_url, zotero_notice=zotero_notice)
             parts.append('<tr><td style="font-family:Aptos,Calibri,Arial,Helvetica,sans-serif;padding:0 0 16px;">' + block + '</td></tr>')
         if not parts:
             parts.append('<tr><td style="font-family:Aptos,Calibri,Arial,Helvetica,sans-serif;padding:16px;background:#ffffff;">No new recommendations in this group.</td></tr>')

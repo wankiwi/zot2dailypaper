@@ -21,10 +21,10 @@ from zot2dailypaper.state import State
 
 ROOT = Path(__file__).resolve().parents[1]
 BRANCH = 'paper-state'
-SNAPSHOT = '695e373bccdbe4ad7dd8e7219781686220926e2d'
-DIGEST = '5b3ff4829f294e9a48c26cd14636d08554572ede530f11cc87b799421cae1018'
+SNAPSHOT = 'e060d088031555c6a77a1344436047c2e6cdb6be'
+DIGEST = '07e4b836fac705fc8dc87c8eb01a6b4d85c0cedbe4a32172f83d18e7e1024eb7'
 COUNT = 50
-REPLAY_REF = 'refs/heads/delivery/replay-39507147167'
+REPLAY_REF = 'refs/heads/delivery/replay-42135791742'
 
 
 @dataclass

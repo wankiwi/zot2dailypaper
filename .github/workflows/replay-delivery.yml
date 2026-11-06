@@ -1,7 +1,7 @@
 name: Replay authorized saved email batch
 on:
   push:
-    branches: [delivery/replay-39507147167]
+    branches: [delivery/replay-42135791742]
 concurrency:
   group: daily-papers
   cancel-in-progress: false
@@ -9,7 +9,7 @@ permissions:
   contents: read
 jobs:
   replay:
-    if: ${{ github.repository == 'wankiwi/zot2dailypaper' && github.ref == 'refs/heads/delivery/replay-39507147167' }}
+    if: ${{ github.repository == 'wankiwi/zot2dailypaper' && github.ref == 'refs/heads/delivery/replay-42135791742' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -21,6 +21,8 @@ jobs:
           enable-cache: false
       - name: Install locked dependencies
         run: uv sync --frozen
+      - name: Validate exact replay code without delivery credentials
+        run: uv run --frozen pytest -q tests/test_delivery_replay.py tests/test_large_author_delivery.py tests/test_recommendation_sync.py tests/test_recommendation_sync_url_contract.py tests/test_construct_email.py
       - name: Replay only the 50 saved recommendations without retrieval or model credentials
         env:
           CUSTOM_CONFIG: ${{ vars.CUSTOM_CONFIG }}

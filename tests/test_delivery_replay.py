@@ -104,6 +104,50 @@ def test_delivery_only_cost_report_does_not_recharge_saved_summaries(batch):
     assert '50 previously generated summaries reused: no new generation cost' in plain
 
 
+def test_saved_399_author_batch_replays_once_without_paid_calls_or_metadata_loss(batch, monkeypatch):
+    from zot2dailypaper.construct_email import email_plain_text
+    from zot2dailypaper.recommendation_sync import WORKER_ORIGIN
+    from zot2dailypaper.protocol import Paper
+    from zot2dailypaper.zotero_action import confirmation_link
+    from zot2dailypaper.state import load_paper
+
+    record = list(batch.state.records.values())[-2]
+    record['paper']['authors'] = [f'Author {i}' for i in range(399)]
+    batch.state.save()
+    batch.snapshot = json.loads(batch.state.path.read_text())
+    # State already normalizes legacy HTTP arXiv links on load, independently
+    # of replay. Compare the canonical saved records, not the legacy fixture.
+    original_papers = {key: copy.deepcopy(value['paper']) for key, value in State(batch.state.path).records.items()}
+    large = load_paper(record['paper'])
+    batch.config.email.zotero_action_origin = WORKER_ORIGIN
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('Saved-batch replay must not retrieve or call a model')
+
+    monkeypatch.setattr(Paper, 'generate_tldr', forbidden)
+    monkeypatch.setattr('httpx.Client.send', forbidden)
+    monkeypatch.setattr('requests.Session.send', forbidden)
+
+    def send(_, html):
+        batch.events.append('smtp')
+        assert batch.client.db.execute('SELECT COUNT(*) FROM papers').fetchone()[0] == 49
+        assert confirmation_link(large, WORKER_ORIGIN) not in html
+        plain = email_plain_text(html)
+        assert '399 authors exceed the 100-author limit' in plain
+        assert '50 previously generated summaries reused' in plain
+        assert 'Delivery-only replay: no new model API calls' in plain
+        batch.sends.append(html)
+
+    monkeypatch.setattr(module, 'send_email', send)
+    assert run(batch) == {'status': 'smtp_accepted', 'count': 50}
+    assert batch.events == ['d1', 'smtp'] and len(batch.client.calls) == 6
+    current = State(batch.state.path)
+    assert not current.pending('email')
+    assert {key: value['paper'] for key, value in current.records.items()} == original_papers
+    assert run(batch, run='later:1')['status'] == 'already_delivered'
+    assert len(batch.sends) == 1
+
+
 def test_smtp_uncertainty_preserves_intent_and_blocks_another_attempt(batch, monkeypatch):
     attempts = []
     def uncertain(*args):
@@ -254,11 +298,19 @@ def test_replay_workflow_only_triggers_the_authorized_branch_with_minimal_creden
     import yaml
     text = (runner.ROOT / '.github/workflows/replay-delivery.yml').read_text()
     workflow = yaml.load(text, Loader=yaml.BaseLoader)
-    assert workflow['on'] == {'push': {'branches': ['delivery/replay-39507147167']}}
+    assert workflow['on'] == {'push': {'branches': ['delivery/replay-42135791742']}}
     assert workflow['concurrency'] == {'group': 'daily-papers', 'cancel-in-progress': 'false'}
     assert 'secrets.OPENAI_API_KEY' not in text and 'secrets.ZOTERO_KEY' not in text and 'secrets.ZOTERO_ID' not in text
     assert 'zot2dailypaper.main' not in text and 'workflow_state.py save' not in text
     assert 'recipient' not in workflow['on']
+    steps = workflow['jobs']['replay']['steps']
+    validation = next(i for i, step in enumerate(steps) if 'pytest' in step.get('run', ''))
+    delivery = next(i for i, step in enumerate(steps) if step.get('run', '').endswith('scripts.replay_delivery'))
+    assert validation < delivery
+    assert all('env' not in step for step in steps[:delivery])
+    assert runner.SNAPSHOT == 'e060d088031555c6a77a1344436047c2e6cdb6be'
+    assert runner.COUNT == 50
+    assert runner.DIGEST == '07e4b836fac705fc8dc87c8eb01a6b4d85c0cedbe4a32172f83d18e7e1024eb7'
 
 
 def test_replay_entrypoint_cannot_run_from_main_or_unrelated_branch(monkeypatch):
