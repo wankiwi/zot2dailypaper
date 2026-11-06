@@ -16,7 +16,8 @@ def sample(tmp_path):
 def test_blind_review_hides_scores_and_blocks_incomplete_labels(tmp_path):
     source=sample(tmp_path);output=tmp_path/'review'
     prepare(source,output,123)
-    rows=list(csv.DictReader((output/'review.csv').open()))
+    with (output/'review.csv').open() as handle:
+        rows=list(csv.DictReader(handle))
     assert len(rows)==200 and 'score' not in rows[0] and 'method' not in rows[0]
     index=json.loads((output/'private-index.json').read_text())
     order=list(index.values())

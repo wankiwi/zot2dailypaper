@@ -1,11 +1,39 @@
 import hashlib
 import time
 import json
+import sqlite3
+from contextlib import closing
 from types import SimpleNamespace
 import pytest
 from zot2dailypaper.zotero_save import SaveService, SaveError, VerifiedSession, ZoteroWriter
 from zot2dailypaper.identity import paper_id
 from tests.canned_responses import make_sample_paper
+
+
+@pytest.fixture(autouse=True)
+def closed_sqlite_connections(monkeypatch):
+    """Keep real connections alive so GC cannot hide a missing close."""
+    connect = sqlite3.connect
+    connections = []
+
+    def tracked_connect(*args, **kwargs):
+        db = connect(*args, **kwargs)
+        connections.append(db)
+        return db
+
+    monkeypatch.setattr(sqlite3, 'connect', tracked_connect)
+    yield connections
+    unclosed = []
+    for db in connections:
+        try:
+            db.in_transaction
+        except sqlite3.ProgrammingError as error:
+            assert 'closed' in str(error)
+        else:
+            unclosed.append(db)
+        finally:
+            db.close()  # Also clean up if this regression fails.
+    assert not unclosed, f'{len(unclosed)} SQLite connections were not closed'
 
 
 def service(tmp_path,writer=None):
@@ -49,6 +77,100 @@ def test_timeout_never_blindly_repeats_write(tmp_path):
     assert 'secret' not in str(exc.value)
     assert svc.save(**args)=='ITEM0001'
     assert [c['allow_write'] for c in calls]==[True,False]
+
+
+def saved_rows(path):
+    with closing(sqlite3.connect(path)) as db:
+        return db.execute('SELECT status,item_key FROM saves').fetchall()
+
+
+def inject_sql_failure(monkeypatch, predicate):
+    connect = sqlite3.connect
+
+    class FaultyConnection(sqlite3.Connection):
+        def execute(self, sql, *args, **kwargs):
+            if predicate(sql, args):
+                raise sqlite3.OperationalError('synthetic database failure')
+            return super().execute(sql, *args, **kwargs)
+
+    def faulty_connect(*args, **kwargs):
+        return connect(*args, factory=FaultyConnection, **kwargs)
+
+    monkeypatch.setattr(sqlite3, 'connect', faulty_connect)
+
+
+def test_schema_failure_closes_connection(tmp_path, monkeypatch):
+    inject_sql_failure(monkeypatch, lambda sql, args: sql.startswith('CREATE TABLE'))
+    with pytest.raises(sqlite3.OperationalError, match='synthetic'):
+        service(tmp_path)
+
+
+def test_query_failure_rolls_back_without_remote_write(tmp_path, monkeypatch):
+    writer = SimpleNamespace(user_id='123', collection_key='TARGET01',
+                             ensure=lambda *a, **kw: pytest.fail('unexpected remote call'))
+    svc, args, _ = service(tmp_path, writer)
+    inject_sql_failure(monkeypatch, lambda sql, args: sql.startswith('SELECT status,item_key FROM saves WHERE'))
+    with pytest.raises(sqlite3.OperationalError, match='synthetic'):
+        svc.save(**args)
+    assert saved_rows(svc.database) == []
+    with closing(sqlite3.connect(svc.database, timeout=0)) as db, db:
+        db.execute('BEGIN IMMEDIATE')  # The failed operation released its lock.
+
+
+def test_pending_reservation_is_durable_before_remote_write(tmp_path):
+    calls = []
+
+    def ensure(paper, **kwargs):
+        calls.append(kwargs)
+        assert saved_rows(tmp_path / 'saves.sqlite') == [('pending', None)]
+        return 'ITEM0001'
+
+    writer = SimpleNamespace(user_id='123', collection_key='TARGET01', ensure=ensure)
+    svc, args, _ = service(tmp_path, writer)
+    assert svc.save(**args) == 'ITEM0001'
+    assert saved_rows(svc.database) == [('complete', 'ITEM0001')]
+    assert svc.save(**args) == 'ITEM0001'
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize('error_type,status', [(TimeoutError, 'uncertain'), (KeyboardInterrupt, 'pending')])
+def test_remote_failure_closes_and_preserves_reconciliation(tmp_path, error_type, status):
+    calls = []
+
+    def ensure(paper, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise error_type('synthetic interruption')
+        return 'ITEM0001'
+
+    writer = SimpleNamespace(user_id='123', collection_key='TARGET01', ensure=ensure)
+    svc, args, _ = service(tmp_path, writer)
+    expected = SaveError if issubclass(error_type, Exception) else error_type
+    with pytest.raises(expected):
+        svc.save(**args)
+    assert saved_rows(svc.database) == [(status, None)]
+    assert svc.save(**args) == 'ITEM0001'
+    assert [call['allow_write'] for call in calls] == [True, False]
+    assert saved_rows(svc.database) == [('complete', 'ITEM0001')]
+
+
+@pytest.mark.parametrize('fail_uncertain', [False, True])
+def test_receipt_failure_preserves_reservation_and_closes(tmp_path, monkeypatch, fail_uncertain):
+    calls = []
+    writer = SimpleNamespace(user_id='123', collection_key='TARGET01',
+                             ensure=lambda *a, **kw: calls.append(kw) or 'ITEM0001')
+    svc, args, _ = service(tmp_path, writer)
+    with monkeypatch.context() as patch:
+        inject_sql_failure(patch, lambda sql, args: sql.startswith('UPDATE saves SET status=')
+                           and (fail_uncertain or args[0][0] == 'complete'))
+        expected = sqlite3.OperationalError if fail_uncertain else SaveError
+        with pytest.raises(expected):
+            svc.save(**args)
+    assert saved_rows(svc.database) == [('pending' if fail_uncertain else 'uncertain', None)]
+    assert svc.save(**args) == 'ITEM0001'
+    assert [call['allow_write'] for call in calls] == [True, False]
+    assert saved_rows(svc.database) == [('complete', 'ITEM0001')]
+
 
 class Response:
     def __init__(self,data,status=200,headers=None):self.data=data;self.status_code=status;self.headers=headers or {}

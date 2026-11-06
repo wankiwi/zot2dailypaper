@@ -3,6 +3,7 @@
 No HTTP listener, credentials, or library destination is configured by this module.
 """
 from dataclasses import dataclass
+from contextlib import closing
 import hashlib
 import hmac
 import json
@@ -132,7 +133,8 @@ class SaveService:
         self.subject=allowed_subject
         # Only the trusted digest loader supplies papers, never request body metadata.
         self.papers={hashlib.sha256(paper_id(p).encode()).hexdigest():p for p in papers}
-        with sqlite3.connect(self.database) as db:
+        # SQLite's context handles transactions, not connection lifetime.
+        with closing(sqlite3.connect(self.database)) as db, db:
             db.execute('CREATE TABLE IF NOT EXISTS saves (identity TEXT PRIMARY KEY, status TEXT NOT NULL, item_key TEXT)')
 
     def _authorize(self,session,identifier):
@@ -152,7 +154,7 @@ class SaveService:
         if origin!=self.origin or not isinstance(csrf_token,str) or not session.csrf_token or not hmac.compare_digest(csrf_token,session.csrf_token):
             raise SaveError('Invalid confirmation origin or CSRF token')
         identity=hashlib.sha256('|'.join([self.subject,self.writer.user_id,self.writer.collection_key,paper_id(paper)]).encode()).hexdigest()
-        with sqlite3.connect(self.database,timeout=30,isolation_level=None) as db:
+        with closing(sqlite3.connect(self.database,timeout=30,isolation_level=None)) as db, db:
             db.execute('BEGIN IMMEDIATE')
             row=db.execute('SELECT status,item_key FROM saves WHERE identity=?',(identity,)).fetchone()
             if row and row[0]=='complete':
