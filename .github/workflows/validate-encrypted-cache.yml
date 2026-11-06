@@ -21,7 +21,7 @@ jobs:
           EMBEDDING_CACHE_KEY: ${{ secrets.EMBEDDING_CACHE_KEY }}
         run: uv run --frozen python scripts/validate_encrypted_cache.py save --package "$RUNNER_TEMP/embedding-validation-package/private.enc"
       - name: Save ciphertext only in isolated validation namespace
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: ${{ runner.temp }}/embedding-validation-package/private.enc
           key: embedding-validation-v1-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -40,7 +40,7 @@ jobs:
       - run: uv sync --frozen
       - name: Restore exact ciphertext key on second runner
         id: restored
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: ${{ runner.temp }}/embedding-validation-package/private.enc
           key: embedding-validation-v1-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}

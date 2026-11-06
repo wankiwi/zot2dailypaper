@@ -17,7 +17,7 @@ from loguru import logger
 from .base import BaseRetriever, register_retriever
 from ..http import session
 from ..identity import deduplicate, normalize_doi
-from ..journals import Journal, discover_nature, selected_journals
+from ..journals import Journal, NATURE_ALIASES, discover_nature, selected_journals
 from ..protocol import Paper
 from ..selection import is_cover_title
 from ..metadata import crossref_metadata
@@ -89,6 +89,12 @@ class JournalRetriever(BaseRetriever):
                 logger.warning(f'Cannot refresh Nature catalogue; using cached/bootstrap list: {exc}')
                 if self.retriever_config.get('require_live_catalog', False):
                     raise
+        # Migrate lookup keys in memory without dropping any saved catalogue
+        # data. Canonical entries and explicit configured ISSNs take priority.
+        for old, canonical in NATURE_ALIASES.items():
+            issns = cached.get('issns', {})
+            if issns.get(old) and not issns.get(canonical):
+                issns[canonical] = issns[old]
         journals = selected_journals(self.retriever_config, discovered)
         if not journals:
             raise ValueError('At least one journal preset or custom journal must be selected')

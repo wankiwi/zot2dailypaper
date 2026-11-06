@@ -72,7 +72,7 @@ jobs:
         run: uv run --frozen python scripts/embedding_cache_state.py gate
       - name: Restore encrypted embedding package
         if: ${{ steps.embedding-cache-gate.outputs.enabled == 'true' }}
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: .embedding-cache/private.enc
           key: embedding-private-v1-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -111,7 +111,7 @@ jobs:
         run: uv run --frozen python scripts/embedding_cache_state.py save
       - name: Save encrypted embedding package
         if: ${{ always() && !cancelled() && steps.seal-embedding-cache.outputs.saved == 'true' }}
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: .embedding-cache/private.enc
           key: embedding-private-v1-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}

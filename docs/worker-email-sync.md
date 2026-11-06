@@ -28,6 +28,16 @@ and 32 KiB per record; oversized or unsafe URLs stop delivery. Long display
 text is truncated only in the saved citation payload, not the recommendation
 history or email. The entire batch is validated before the first D1 write.
 
+One supported degradation keeps large-collaboration papers deliverable without
+silently losing creators: a valid citation with more than the Worker's 100-author
+limit remains in the email and saved history, with every author preserved in
+history. Only that paper's Worker save link is omitted, with an explicit notice
+and its original Article link for full-metadata import. It is not written to D1
+as a truncated citation. All remaining citations must still pass sync/readback
+before email. Invalid URLs, identities, author values or other malformed fields
+continue to block the entire batch. Both normal delivery and saved-batch replay
+use this rule. No Worker deployment or data migration is needed.
+
 At the current 50-paper quota this is at most six D1 REST requests per run
 (three writes and three indexed public readbacks). The sync admits at most
 1,000 papers, uses batches of 20/80 bound write parameters, caps each response

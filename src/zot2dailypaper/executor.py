@@ -23,7 +23,7 @@ from .abstracts import clean_abstract, recover_abstracts, RecoveryContext, recov
 from time import monotonic
 from collections import Counter
 from .metadata import recover_metadata
-from .recommendation_sync import sync_client
+from .recommendation_sync import prepare_sync_batch, sync_client
 from .api_costs import ApiCosts
 from threading import Lock
 
@@ -216,8 +216,12 @@ class Executor:
             if pending or (self.config.executor.send_empty and not errors):
                 try:
                     if metadata_sync is not None:
-                        metadata_sync.sync(pending, state)
-                        logger.info(f'Verified {len(pending)} recommendation citations in D1')
+                        syncable = prepare_sync_batch(pending)
+                        metadata_sync.sync(syncable, state)
+                        logger.info(f'Verified {len(syncable)} recommendation citations in D1')
+                        if len(syncable) < len(pending):
+                            logger.warning(f'{len(pending) - len(syncable)} recommendations exceed the Worker author limit; '
+                                           'full metadata retained, email includes Article links and an explicit unavailable-save notice')
                     generated = sum(p.has_ai_summary for p in pending)
                     reasons = dict(Counter(p.tldr_error_reason or p.tldr_error or 'not_generated'
                                            for p in pending if not p.has_ai_summary))

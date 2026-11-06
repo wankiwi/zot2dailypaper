@@ -6,7 +6,7 @@ import copy
 import json
 import pytest
 from zot2dailypaper import budget,openai_pricing as prices
-from zot2dailypaper.api_costs import ApiCosts,summary_schedule
+from zot2dailypaper.api_costs import summary_schedule
 from tests.canned_responses import make_chat_response,make_sample_paper
 from tests.test_budget import make_git
 
@@ -202,7 +202,7 @@ def test_original_daily_ledger_is_shared_and_crash_claim_preserved(config,tmp_pa
 
 def test_quote_expiry_inside_still_valid_singapore_budget_window_stops_calls(config,monkeypatch):
     from dataclasses import replace
-    cfg=official(config);record=prices.quote(DAY)
+    record=prices.quote(DAY)
     schedule=replace(summary_schedule(record),valid_through='2026-11-06')
     window=SimpleNamespace(start=datetime(2026,11,6,16,tzinfo=timezone.utc),
                            end=datetime(2026,11,7,16,tzinfo=timezone.utc),

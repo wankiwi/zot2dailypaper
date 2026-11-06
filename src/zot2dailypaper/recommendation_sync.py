@@ -23,6 +23,7 @@ BATCH_SIZE = 20
 MAX_PAPERS = 1000
 MAX_RESPONSE_BYTES = 1024 * 1024
 MAX_SYNC_SECONDS = 120
+MAX_CITATION_AUTHORS = 100
 UPSERT = (
     'INSERT INTO papers(id,canonical_identity,payload,updated_at) VALUES {values} '
     'ON CONFLICT(id) DO UPDATE SET canonical_identity=excluded.canonical_identity,'
@@ -34,6 +35,10 @@ FAILURE = 'Recommendation metadata sync failed; email remains pending. Check D1 
 
 class SyncUnavailable(RuntimeError):
     """Only fixed, non-secret messages may cross the transport boundary."""
+
+
+class CitationAuthorsLimit(SyncUnavailable):
+    """Valid citation cannot fit the unchanged Worker's creator-count contract."""
 
 
 def _bounded_text(value, limit):
@@ -85,7 +90,7 @@ def citation_payload(paper):
                 or parts.username or parts.password or parts.port not in (None, 443)):
             raise ValueError
         _public_hostname(parts.hostname)
-        if not isinstance(paper.authors, list) or len(paper.authors) > 100:
+        if not isinstance(paper.authors, list):
             raise ValueError
         title = _bounded_text(paper.title, 512)
         if not title.strip():
@@ -102,12 +107,39 @@ def citation_payload(paper):
             'journal': _bounded_text(paper.journal or '', 256),
             'published': paper.published.strftime('%Y-%m-%d') if paper.published else '',
         }
+        # Validate every author and every other field before classifying this
+        # supported degradation. Never truncate creators into an incomplete
+        # Zotero citation or mutate the full saved recommendation.
+        if len(paper.authors) > MAX_CITATION_AUTHORS:
+            raise CitationAuthorsLimit('Citation exceeds the Worker author limit; full metadata retained.')
         encoded = json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
         if len(encoded.encode('utf-8')) > 32768:
             raise ValueError
         return encoded
     except (AttributeError, TypeError, ValueError, UnicodeError, LocationParseError):
         raise SyncUnavailable('Invalid recommendation metadata; email remains pending.') from None
+
+
+def prepare_sync_batch(papers):
+    """Validate all records, omitting only valid citations with too many authors.
+
+    Omitted recommendations remain in the digest and delivery history. Their
+    cards must show an explicit unavailable-save notice instead of a broken
+    Worker link. Malformed fields/identities still block the entire batch.
+    """
+    if len(papers) > MAX_PAPERS:
+        raise SyncUnavailable('Recommendation batch exceeds sync limit; email remains pending.')
+    supported = []
+    for paper in papers:
+        identity = paper_id(paper)
+        if len(identity) > 2048 or re.search(r'[\x00-\x1f\x7f]', identity):
+            raise SyncUnavailable('Invalid recommendation identity; email remains pending.')
+        try:
+            citation_payload(paper)
+        except CitationAuthorsLimit:
+            continue
+        supported.append(paper)
+    return supported
 
 
 class RecommendationSync:

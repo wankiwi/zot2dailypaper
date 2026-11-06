@@ -7,7 +7,7 @@ from loguru import logger
 
 from .construct_email import render_email
 from .identity import paper_id
-from .recommendation_sync import citation_payload, sync_client
+from .recommendation_sync import prepare_sync_batch, sync_client
 from .state import load_paper, paper_dict
 from .utils import send_email
 from .api_costs import ApiCosts
@@ -70,8 +70,7 @@ def replay(config, snapshot, snapshot_sha, count, digest, store, run_token):
     if key in view.ledger['replays']:
         raise ReplayBlocked('A previous SMTP attempt exists for this batch; inspect its outcome, do not resend')
     # Validate every citation and render before D1 writes or the durable SMTP intent.
-    for paper in papers:
-        citation_payload(paper)
+    syncable = prepare_sync_batch(papers)
     costs = ApiCosts()
     costs.saved_summaries = sum(p.has_ai_summary for p in papers)
     html = render_email(papers, affiliation_max_chars=config.email.get('affiliation_max_chars', 180),
@@ -81,8 +80,11 @@ def replay(config, snapshot, snapshot_sha, count, digest, store, run_token):
                         delivery_only=True)  # No model calls or pricing lookup.
     metadata_sync = sync_client(config.email)
     if metadata_sync is not None:
-        metadata_sync.sync(papers, view.state)
-        logger.info(f'Verified {count} recommendation citations in D1 for saved-batch replay')
+        metadata_sync.sync(syncable, view.state)
+        logger.info(f'Verified {len(syncable)} recommendation citations in D1 for saved-batch replay')
+        if len(syncable) < count:
+            logger.warning(f'{count - len(syncable)} saved recommendations exceed the Worker author limit; '
+                           'full metadata retained, email includes Article links and an explicit unavailable-save notice')
     logger.info(f'Delivery-only replay: {count} saved recommendations, '
                 f'{sum(p.has_ai_summary for p in papers)} saved AI summaries; no retrieval or model calls')
     for _ in range(3):

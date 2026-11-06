@@ -1,5 +1,5 @@
 """Journal presets. Nature coverage is refreshed from its official site index."""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit
 import re
@@ -32,7 +32,7 @@ CORE = {
     'prl': Journal('prl', 'Physical Review Letters', ('0031-9007', '1079-7114'), 'https://feeds.aps.org/rss/recent/prl.xml'),
     'nature': Journal('nature', 'Nature', ('0028-0836', '1476-4687'), 'https://www.nature.com/nature.rss'),
     'science': Journal('science', 'Science', ('0036-8075', '1095-9203'), 'https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=science'),
-    'science_advances': Journal('science_advances', 'Science Advances', ('2375-2548',), 'https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=advances'),
+    'science_advances': Journal('science_advances', 'Science Advances', ('2375-2548',), 'https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=sciadv'),
     'jcp': Journal('jcp', 'The Journal of Chemical Physics', ('0021-9606', '1089-7690'), None),
     'jpcl': Journal('jpcl', 'The Journal of Physical Chemistry Letters', ('1948-7185',), 'https://pubs.acs.org/action/showFeed?type=etoc&feed=rss&jc=jpclcd'),
 }
@@ -46,12 +46,12 @@ _NATURE = {
     'natcities': 'Nature Cities', 'nclimate': 'Nature Climate Change',
     'ncomms': 'Nature Communications', 'natcomputsci': 'Nature Computational Science',
     'natecolevol': 'Nature Ecology & Evolution', 'natelectron': 'Nature Electronics',
-    'natenergy': 'Nature Energy', 'natfood': 'Nature Food', 'ng': 'Nature Genetics',
+    'nenergy': 'Nature Energy', 'natfood': 'Nature Food', 'ng': 'Nature Genetics',
     'ngeo': 'Nature Geoscience', 'nathumbehav': 'Nature Human Behaviour',
     'ni': 'Nature Immunology', 'natmachintell': 'Nature Machine Intelligence',
     'nmat': 'Nature Materials', 'nm': 'Nature Medicine', 'natmentalhealth': 'Nature Mental Health',
-    'natmetab': 'Nature Metabolism', 'nmeth': 'Nature Methods', 'natmicrobiol': 'Nature Microbiology',
-    'nnano': 'Nature Nanotechnology', 'nn': 'Nature Neuroscience', 'nphoton': 'Nature Photonics',
+    'natmetab': 'Nature Metabolism', 'nmeth': 'Nature Methods', 'nmicrobiol': 'Nature Microbiology',
+    'nnano': 'Nature Nanotechnology', 'neuro': 'Nature Neuroscience', 'nphoton': 'Nature Photonics',
     'nphys': 'Nature Physics', 'nplants': 'Nature Plants', 'nprot': 'Nature Protocols',
     'nsmb': 'Nature Structural & Molecular Biology', 'natsustain': 'Nature Sustainability',
     'natsynth': 'Nature Synthesis', 'natwater': 'Nature Water',
@@ -62,11 +62,17 @@ _NATURE = {
     'natrevelectreng': 'Nature Reviews Electrical Engineering', 'nrendo': 'Nature Reviews Endocrinology',
     'nrgastro': 'Nature Reviews Gastroenterology & Hepatology', 'nrg': 'Nature Reviews Genetics',
     'nri': 'Nature Reviews Immunology', 'natrevmats': 'Nature Reviews Materials',
-    'natrevmethodsprimers': 'Nature Reviews Methods Primers', 'nrmicro': 'Nature Reviews Microbiology',
+    'nrmp': 'Nature Reviews Methods Primers', 'nrmicro': 'Nature Reviews Microbiology',
     'nrm': 'Nature Reviews Molecular Cell Biology', 'nrneph': 'Nature Reviews Nephrology',
     'nrneurol': 'Nature Reviews Neurology', 'nrn': 'Nature Reviews Neuroscience',
-    'natrevphys': 'Nature Reviews Physics', 'natrevpsychol': 'Nature Reviews Psychology',
+    'natrevphys': 'Nature Reviews Physics', 'nrpsychol': 'Nature Reviews Psychology',
     'nrrheum': 'Nature Reviews Rheumatology', 'nrurol': 'Nature Reviews Urology',
+}
+# Keep saved presets and cached ISSNs compatible with earlier bootstrap slugs.
+# Canonical slugs are verified against https://www.nature.com/siteindex.
+NATURE_ALIASES = {
+    'natenergy': 'nenergy', 'natmicrobiol': 'nmicrobiol', 'nn': 'neuro',
+    'natrevmethodsprimers': 'nrmp', 'natrevpsychol': 'nrpsychol',
 }
 NATURE = {slug: CORE['nature'] if slug == 'nature' else Journal(slug, title, rss=f'https://www.nature.com/{slug}.rss') for slug, title in _NATURE.items()}
 
@@ -108,15 +114,39 @@ def discover_nature(html: str) -> dict[str, Journal]:
 
 
 def selected_journals(config, discovered=None) -> list[Journal]:
-    available = {**NATURE, **(discovered or {}), **CORE}
+    nature = dict(NATURE)
+    for journal in (discovered or {}).values():
+        canonical = NATURE_ALIASES.get(journal.id, journal.id)
+        if canonical != journal.id:
+            # A pre-fix catalogue can outlive a deployment. Repair only the
+            # exact legacy feed we generated, not a separately supplied URL.
+            old_rss = f'https://www.nature.com/{journal.id}.rss'
+            journal = replace(journal, id=canonical,
+                              rss=NATURE[canonical].rss if journal.rss == old_rss else journal.rss)
+        # Live/cached official discovery wins if a publisher changes its slug.
+        # Match complete titles only; do not merge similarly named journals.
+        title = ' '.join(journal.title.split()).casefold()
+        nature = {key: value for key, value in nature.items()
+                  if key == journal.id or ' '.join(value.title.split()).casefold() != title}
+        nature[journal.id] = journal
+    available = {**nature, **CORE}
+    def selected_id(key):
+        canonical = NATURE_ALIASES.get(key, key)
+        if canonical not in available and canonical in NATURE:
+            title = ' '.join(NATURE[canonical].title.split()).casefold()
+            canonical = next((j.id for j in nature.values()
+                              if ' '.join(j.title.split()).casefold() == title), canonical)
+        return canonical
+
     selected = []
     for key in config.get('presets', []):
         if key == 'nature_family':
-            selected.extend(available[key] for key in {**NATURE, **(discovered or {})})
-        elif key in available:
-            selected.append(available[key])
+            selected.extend(available[key] for key in nature)
         else:
-            raise ValueError(f'Unknown journal preset: {key}')
+            canonical = selected_id(key)
+            if canonical not in available:
+                raise ValueError(f'Unknown journal preset: {key}')
+            selected.append(available[canonical])
     for item in config.get('custom', []):
-        selected.append(Journal(item['id'], item['title'], tuple(item.get('issns', [])), item.get('rss')))
+        selected.append(Journal(selected_id(item['id']), item['title'], tuple(item.get('issns', [])), item.get('rss')))
     return list({j.id: j for j in selected}.values())
