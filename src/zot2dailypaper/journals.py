@@ -20,6 +20,8 @@ class Journal:
             raise ValueError(f'Journal feeds must use HTTPS: {self.title}')
 
 
+# ACS RSS endpoints reject automated requests (HTTP 403). Use the existing
+# public Crossref journal source rather than repeatedly requesting blocked feeds.
 CORE = {
     'pnas': Journal('pnas', 'Proceedings of the National Academy of Sciences of the United States of America', ('0027-8424', '1091-6490'), None),
     'acs_catalysis': Journal('acs_catalysis', 'ACS Catalysis', ('2155-5435',), None),
@@ -27,14 +29,14 @@ CORE = {
     'angew': Journal('angew', 'Angewandte Chemie International Edition', ('1433-7851', '1521-3773'), None),
     'chemical_science': Journal('chemical_science', 'Chemical Science', ('2041-6520', '2041-6539'), None),
     'mlst': Journal('mlst', 'Machine Learning: Science and Technology', ('2632-2153',), None),
-    'jacs': Journal('jacs', 'Journal of the American Chemical Society', ('0002-7863', '1520-5126'), 'https://pubs.acs.org/action/showFeed?type=etoc&feed=rss&jc=jacsat'),
-    'jctc': Journal('jctc', 'Journal of Chemical Theory and Computation', ('1549-9618', '1549-9626'), 'https://pubs.acs.org/action/showFeed?type=etoc&feed=rss&jc=jctcce'),
+    'jacs': Journal('jacs', 'Journal of the American Chemical Society', ('0002-7863', '1520-5126'), None),
+    'jctc': Journal('jctc', 'Journal of Chemical Theory and Computation', ('1549-9618', '1549-9626'), None),
     'prl': Journal('prl', 'Physical Review Letters', ('0031-9007', '1079-7114'), 'https://feeds.aps.org/rss/recent/prl.xml'),
     'nature': Journal('nature', 'Nature', ('0028-0836', '1476-4687'), 'https://www.nature.com/nature.rss'),
     'science': Journal('science', 'Science', ('0036-8075', '1095-9203'), 'https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=science'),
     'science_advances': Journal('science_advances', 'Science Advances', ('2375-2548',), 'https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=sciadv'),
     'jcp': Journal('jcp', 'The Journal of Chemical Physics', ('0021-9606', '1089-7690'), None),
-    'jpcl': Journal('jpcl', 'The Journal of Physical Chemistry Letters', ('1948-7185',), 'https://pubs.acs.org/action/showFeed?type=etoc&feed=rss&jc=jpclcd'),
+    'jpcl': Journal('jpcl', 'The Journal of Physical Chemistry Letters', ('1948-7185',), None),
 }
 # Offline bootstrap list; live discovery adds new Nature-branded journals.
 _NATURE = {
@@ -77,6 +79,16 @@ NATURE_ALIASES = {
 NATURE = {slug: CORE['nature'] if slug == 'nature' else Journal(slug, title, rss=f'https://www.nature.com/{slug}.rss') for slug, title in _NATURE.items()}
 
 
+def repair_generated_feed(journal):
+    # Nature Digest is in the site index, but its generated /ndigest.rss
+    # endpoint returns 404. Retain the title and ISSNs for Crossref, including
+    # entries loaded from the persisted catalogue. Do not alter custom feeds.
+    if (journal.id == 'ndigest' and journal.title == 'Nature Digest'
+            and journal.rss == 'https://www.nature.com/ndigest.rss'):
+        return replace(journal, rss=None)
+    return journal
+
+
 class NatureIndex(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -101,7 +113,7 @@ class NatureIndex(HTMLParser):
         slug = url.path.strip('/')
         not_journals = {'Nature Portfolio', 'Nature Research', 'Nature Index', 'Nature Careers', 'Nature Masterclasses', 'Nature Events', 'Nature Africa', 'Nature India', 'Nature Middle East', 'Nature Outlook', 'Nature Podcast', 'Nature Video'}
         if title not in not_journals and url.hostname == 'www.nature.com' and re.fullmatch(r'[a-z][a-z0-9-]*', slug) and (title == 'Nature' or title.startswith('Nature ')):
-            self.journals[slug] = Journal(slug, title, rss=f'https://www.nature.com/{slug}.rss')
+            self.journals[slug] = repair_generated_feed(Journal(slug, title, rss=f'https://www.nature.com/{slug}.rss'))
         self.link = None
 
 
@@ -116,6 +128,7 @@ def discover_nature(html: str) -> dict[str, Journal]:
 def selected_journals(config, discovered=None) -> list[Journal]:
     nature = dict(NATURE)
     for journal in (discovered or {}).values():
+        journal = repair_generated_feed(journal)
         canonical = NATURE_ALIASES.get(journal.id, journal.id)
         if canonical != journal.id:
             # A pre-fix catalogue can outlive a deployment. Repair only the

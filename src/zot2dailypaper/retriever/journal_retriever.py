@@ -131,6 +131,8 @@ class JournalRetriever(BaseRetriever):
 
     def _crossref(self, journal, client, since, until):
         results = []
+        indexed = False
+        not_indexed = None
         for issn in journal.issns:
             cursor = '*'
             seen_cursors = set()
@@ -141,7 +143,17 @@ class JournalRetriever(BaseRetriever):
                 if self.retriever_config.get('mailto'):
                     params['mailto'] = self.retriever_config.mailto
                 response = client.get(f'https://api.crossref.org/journals/{quote(issn)}/works', params=params, timeout=self.timeout)
-                response.raise_for_status()
+                try:
+                    response.raise_for_status()
+                except Exception as exc:
+                    # A print/electronic ISSN may not have its own index. A
+                    # first-page 404 must not discard another indexed ISSN's
+                    # results. Other errors and mid-pagination 404s remain fatal.
+                    if cursor == '*' and getattr(response, 'status_code', None) == 404:
+                        not_indexed = exc
+                        break
+                    raise
+                indexed = True
                 message = response.json()['message']
                 items = message.get('items', [])
                 if not items:
@@ -186,6 +198,8 @@ class JournalRetriever(BaseRetriever):
                     break
             else:
                 raise RuntimeError(f'Crossref page limit reached for {journal.title}; increase max_pages')
+        if not indexed and not_indexed is not None:
+            raise not_indexed
         return results
 
     def _rss(self, journal, client, since, until):
@@ -251,7 +265,7 @@ class JournalRetriever(BaseRetriever):
                            f'({len(papers)} items in window). Historical window coverage is not verified.')
         elif not crossref_ok and papers:
             logger.warning(f'{journal.title}: RSS recovered {len(papers)} papers, but complete date-window coverage is unverified')
-        if errors:
+        if errors and not (not crossref_ok and rss_ok and unsupported):
             logger.warning(f'{journal.title}: ' + '; '.join(errors))
         # Unindexed journals can use a valid publisher feed with an explicit
         # warning. Rate limits, server errors and invalid feeds remain failures.

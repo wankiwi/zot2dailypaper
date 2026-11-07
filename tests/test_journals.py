@@ -241,7 +241,7 @@ def test_rss_recovery_is_not_reported_as_complete_window(config, monkeypatch):
     monkeypatch.setattr('zot2dailypaper.retriever.journal_retriever.session', lambda *args:nullcontext(object()))
     monkeypatch.setattr(retriever,'_rss',lambda *args:[paper])
     monkeypatch.setattr(retriever,'_crossref',lambda *args:(_ for _ in ()).throw(RuntimeError('429 exhausted')))
-    _, papers, failed = retriever._journal(CORE['jacs'], None, None)
+    _, papers, failed = retriever._journal(CORE['prl'], None, None)
     assert papers == [paper] and failed
 
 
@@ -266,7 +266,7 @@ def test_unindexed_journal_rss_fallback_is_explicit(config, monkeypatch, indexed
     monkeypatch.setattr(retriever, '_crossref', crossref)
     warnings = []
     monkeypatch.setattr('zot2dailypaper.retriever.journal_retriever.logger.warning', warnings.append)
-    _, papers, failed = retriever._journal(CORE['jacs'], None, None)
+    _, papers, failed = retriever._journal(CORE['prl'], None, None)
     assert papers == [] and failed == (not rss_available)
     if rss_available:
         assert any('RSS-only fallback (0 items' in message and 'not verified' in message for message in warnings)
