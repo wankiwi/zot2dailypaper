@@ -60,51 +60,20 @@ class BiorxivRetriever(BaseRetriever):
         categories = set(self.categories)
         records = []
         with session() as client:
-            for category in sorted(categories):
-                cursor = 0
-                expected_total = None
-                for _ in range(max_pages):
-                    query = '' if category == '*' else '?' + urlencode({'category': category})
-                    response = client.get(f'https://api.biorxiv.org/details/{self.server}/{since}/{until}/{cursor}{query}',
-                                          timeout=(10, 30))
-                    response.raise_for_status()
-                    result = response.json()
-                    if not isinstance(result, dict):
-                        raise ValueError(f'{self.name} API response must be an object')
-                    messages = result.get('messages', [])
-                    if not isinstance(messages, list) or any(not isinstance(m, dict) for m in messages):
-                        raise ValueError(f'{self.name} API messages must be a list of objects')
-                    statuses = {m.get('status') for m in messages}
-                    total = messages[0].get('total') if messages else None
-                    if total is not None:
-                        if isinstance(total, bool) or not str(total).isdigit():
-                            raise ValueError(f'{self.name} API total must be a nonnegative integer')
-                        expected_total = max(expected_total or 0, int(total))
-                    if statuses == {'no posts found'}:
-                        # This official empty-window response may omit collection.
-                        # It is valid only when it cannot conceal unfinished pagination.
-                        if result.get('collection', []) != [] or (expected_total is not None and cursor < expected_total):
-                            raise RuntimeError(f'{self.name} API pagination returned an incomplete or contradictory empty collection')
-                        logger.info(f'{self.name}: no posts in category {category} for {since}–{until}')
-                        break
-                    if statuses - {None, 'ok'}:
-                        raise RuntimeError(f'{self.name} API returned a failure status')
-                    collection = result['collection']
-                    if not isinstance(collection, list) or any(not isinstance(c, dict) for c in collection):
-                        raise ValueError(f'{self.name} API collection must be a list of objects')
-                    for item in collection:
-                        if since.isoformat() <= item.get('date', '') <= until.isoformat():
-                            if '*' in categories or item.get('category', '').lower() in categories:
-                                records.append(item)
-                    cursor += len(collection)
-                    if expected_total is not None and cursor >= expected_total:
-                        break
-                    if not collection:
-                        if expected_total is not None:
-                            raise RuntimeError(f'{self.name} API pagination returned an incomplete collection')
-                        break
-                else:
-                    raise RuntimeError(f'{self.name} max_pages reached; narrow window_days or increase max_pages')
+            try:
+                for category in sorted(categories):
+                    records.extend(self._retrieve_query(client, since, until, category, max_pages))
+            except (requests.Timeout, requests.ConnectionError) as exc:
+                # A category query can stall even while the date-only endpoint works.
+                # Never change route after TLS/access failures or retry an already
+                # unfiltered request. Discard partial category results before recovery.
+                if isinstance(exc, requests.exceptions.SSLError) or '*' in categories:
+                    raise
+                logger.warning(f'{self.name}: category transport failed; recovering the complete date window before local category filtering: {exc}')
+                records = self._retrieve_query(client, since, until, '*', max_pages)
+                logger.warning(f'{self.name}: recovered complete date window; applying configured category scope locally')
+        records = [item for item in records
+                   if '*' in categories or item.get('category', '').lower() in categories]
         # bioRxiv and medRxiv use the same DOI for all versions.
         newest = {}
         for item in records:
@@ -112,6 +81,54 @@ class BiorxivRetriever(BaseRetriever):
             if doi and (doi not in newest or int(item.get('version', 0)) > int(newest[doi].get('version', 0))):
                 newest[doi] = item
         records = list(newest.values())
+        return records
+
+    def _retrieve_query(self, client, since, until, category, max_pages):
+        """Return a complete query or raise; never pass partial pages downstream."""
+        records = []
+        cursor = 0
+        expected_total = None
+        for _ in range(max_pages):
+            query = '' if category == '*' else '?' + urlencode({'category': category})
+            response = client.get(f'https://api.biorxiv.org/details/{self.server}/{since}/{until}/{cursor}{query}',
+                                  timeout=(10, 60))
+            response.raise_for_status()
+            result = response.json()
+            if not isinstance(result, dict):
+                raise ValueError(f'{self.name} API response must be an object')
+            messages = result.get('messages', [])
+            if not isinstance(messages, list) or any(not isinstance(m, dict) for m in messages):
+                raise ValueError(f'{self.name} API messages must be a list of objects')
+            statuses = {m.get('status') for m in messages}
+            total = messages[0].get('total') if messages else None
+            if total is not None:
+                if isinstance(total, bool) or not str(total).isdigit():
+                    raise ValueError(f'{self.name} API total must be a nonnegative integer')
+                expected_total = max(expected_total or 0, int(total))
+            if statuses == {'no posts found'}:
+                # This official empty-window response may omit collection.
+                # It is valid only when it cannot conceal unfinished pagination.
+                if result.get('collection', []) != [] or (expected_total is not None and cursor < expected_total):
+                    raise RuntimeError(f'{self.name} API pagination returned an incomplete or contradictory empty collection')
+                logger.info(f'{self.name}: no posts in category {category} for {since}–{until}')
+                break
+            if statuses - {None, 'ok'}:
+                raise RuntimeError(f'{self.name} API returned a failure status')
+            collection = result['collection']
+            if not isinstance(collection, list) or any(not isinstance(c, dict) for c in collection):
+                raise ValueError(f'{self.name} API collection must be a list of objects')
+            for item in collection:
+                if since.isoformat() <= item.get('date', '') <= until.isoformat():
+                    records.append(item)
+            cursor += len(collection)
+            if expected_total is not None and cursor >= expected_total:
+                break
+            if not collection:
+                if expected_total is not None:
+                    raise RuntimeError(f'{self.name} API pagination returned an incomplete collection')
+                break
+        else:
+            raise RuntimeError(f'{self.name} max_pages reached; narrow window_days or increase max_pages')
         return records
 
     def retrieve_papers(self):
@@ -135,3 +152,4 @@ class BiorxivRetriever(BaseRetriever):
             doi=normalize_doi(raw_paper.get('doi')),
             published=datetime.fromisoformat(raw_paper['date']).replace(tzinfo=timezone.utc) if raw_paper.get('date') else None,
         )
+
