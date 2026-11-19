@@ -157,7 +157,9 @@ class ArxivSession(requests.Session):
 def api_client():
     # The pinned arxiv client otherwise repeats every HTTP error at a fixed 3s
     # interval and supplies no request timeout. Keep exactly one retry layer.
-    client = arxiv.Client(page_size=100, num_retries=0, delay_seconds=3)
+    # Keep slices well below arXiv's 2,000-entry cap. Moderate batching
+    # and a longer interval lower request pressure without narrowing coverage.
+    client = arxiv.Client(page_size=250, num_retries=0, delay_seconds=10)
     old_session = getattr(client, '_session', None)
     if old_session is not None:
         old_session.close()
