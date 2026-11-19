@@ -190,6 +190,7 @@ class Executor:
         if maximum < 1 or not 1 <= workers <= 8:
             raise ValueError('max_paper_num must be positive and enrichment_workers must be between 1 and 8')
         errors = []
+        retrieval_warnings = []
         self.api_costs = ApiCosts()
         self.summary_reuse_lock = Lock()
         if hasattr(self, 'reranker'):
@@ -200,7 +201,7 @@ class Executor:
         self.llm_blocked_reason = self.llm_blocked_code = self.llm_blocked_day = self.llm_retry_at = None
         self.llm_blocked_timezone = None
         try:
-            ranked = self._recommend(state, errors, maximum, workers)
+            ranked = self._recommend(state, retrieval_warnings, maximum, workers)
         except Exception as exc:
             # SDK exceptions may include provider bodies/account identifiers.
             detail = 'Embedding API unavailable; provider details withheld' if isinstance(exc, APIError) else str(exc)
@@ -213,7 +214,7 @@ class Executor:
         state.save()  # Preserve pending deliveries before contacting transports.
         if email_enabled:
             pending = pending_batch(state.pending('email'), quotas, maximum)
-            if pending or (self.config.executor.send_empty and not errors):
+            if pending or (self.config.executor.send_empty and not errors and not retrieval_warnings):
                 try:
                     if metadata_sync is not None:
                         syncable = prepare_sync_batch(pending)
@@ -255,22 +256,35 @@ class Executor:
                 errors.append(f'rss: {exc}')
         if errors:
             raise RuntimeError('Pipeline completed with failures: ' + '; '.join(errors))
-        logger.info('Recommendation outputs completed')
+        if retrieval_warnings:
+            logger.warning(f'Recommendation outputs completed with partial source coverage ({len(retrieval_warnings)} source warnings)')
+        else:
+            logger.info('Recommendation outputs completed')
 
-    def _recommend(self, state, errors, maximum, workers):
+    def _recommend(self, state, retrieval_warnings, maximum, workers):
         corpus = self.filter_corpus(self.fetch_zotero_corpus())
         self.effective_interest_weights = interest_profile(self.config).effective_weights(bool(corpus))
         if not corpus:
             logger.warning('No Zotero papers with abstracts matched; ranking by configured keywords only')
         candidates = []
+        available_sources = 0
         for source, retriever in self.retrievers.items():
             try:
-                candidates.extend(retriever.retrieve_papers())
-                if getattr(retriever, 'failures', []):
-                    errors.append(f"{source}: incomplete retrieval for {', '.join(retriever.failures)}")
+                papers = list(retriever.retrieve_papers())
+                failures = getattr(retriever, 'failures', [])
+                if failures:
+                    detail = f"{source}: incomplete retrieval for {', '.join(failures)}"
+                    logger.warning(f'Retrieval incomplete; keeping fully retrieved records: {detail}')
+                    retrieval_warnings.append(detail)
+                candidates.extend(papers)
+                if not failures or papers:
+                    available_sources += 1
             except Exception as exc:
-                logger.error(f'Retrieval failed for {source}: {exc}')
-                errors.append(f'{source}: {exc}')
+                detail = f'{source}: {exc}'
+                logger.warning(f'Skipping failed source: {detail}')
+                retrieval_warnings.append(detail)
+        if retrieval_warnings and not available_sources:
+            raise RuntimeError('No candidate source completed or returned usable records: ' + '; '.join(retrieval_warnings))
         covers = sum(is_cover_title(p.title) for p in candidates)
         if covers:
             logger.info(f'Excluded {covers} publisher cover items before ranking and quotas')

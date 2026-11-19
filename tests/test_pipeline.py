@@ -49,6 +49,9 @@ def test_email_failure_does_not_block_rss_and_retries_without_retrieval(pipeline
         pipeline.output.email.enabled = True
     executor = Executor(pipeline)
     monkeypatch.setattr(executor.retrievers['arxiv'], 'retrieve_papers', lambda: [make_sample_paper()])
+    def failed_source():
+        raise OSError('feed down')
+    executor.retrievers['journals'] = SimpleNamespace(retrieve_papers=failed_source)
     monkeypatch.setattr('zot2dailypaper.executor.send_email', lambda *a: (_ for _ in ()).throw(OSError('smtp down')))
     with pytest.raises(RuntimeError, match='smtp down'):
         executor.run()
@@ -83,10 +86,13 @@ def test_enrichment_runs_only_for_selected_papers(pipeline, monkeypatch):
     assert len(enriched) == 1
 
 
-def test_partial_source_failure_is_not_reported_as_success(pipeline, monkeypatch):
+def test_all_sources_failed_does_not_send_empty(pipeline, monkeypatch):
+    pipeline.output.email.enabled = True
+    pipeline.executor.send_empty = True
     executor = Executor(pipeline)
     monkeypatch.setattr(executor.retrievers['arxiv'], 'retrieve_papers', lambda: (_ for _ in ()).throw(OSError('feed down')))
-    with pytest.raises(RuntimeError, match='feed down'):
+    monkeypatch.setattr('zot2dailypaper.executor.send_email', lambda *args: pytest.fail('No empty digest on outage'))
+    with pytest.raises(RuntimeError, match='No candidate source.*arxiv: feed down'):
         executor.run()
 
 
@@ -95,7 +101,7 @@ def test_invalid_arxiv_later_page_preserves_other_source_delivery_and_dedup(pipe
     pipeline.source.arxiv.window_days = 7
     pipeline.source.arxiv.category = ['cs.AI']
     pipeline.output.email.enabled = True
-    pipeline.executor.send_empty = False
+    pipeline.executor.send_empty = True  # A degraded run must not emit a misleading empty digest.
     calls = transport(monkeypatch, [page(entry(1), total=2), b'<html>bad page</html>'] * 2)
     sent = []
     monkeypatch.setattr('zot2dailypaper.executor.send_email', lambda *args: sent.append(args))
@@ -103,8 +109,7 @@ def test_invalid_arxiv_later_page_preserves_other_source_delivery_and_dedup(pipe
     for _ in range(2):
         executor = Executor(pipeline)
         executor.retrievers['journals'] = SimpleNamespace(retrieve_papers=lambda: [other])
-        with pytest.raises(RuntimeError, match='arxiv: arXiv HTTP 200 is not an Atom feed'):
-            executor.run()
+        executor.run()
     saved = State(pipeline.state.path)
     assert len(calls) == 4 and len(sent) == 1
     assert len(saved.records) == 1 and next(iter(saved.records.values()))['paper']['source'] == 'journals'
@@ -184,7 +189,7 @@ def test_missing_abstract_ranks_with_title(config):
     assert Reranker(config).rerank([paper], make_sample_corpus(1))[0].scoring_basis == 'title only'
 
 
-@pytest.mark.parametrize('failure_stage', ['corpus', 'ranking'])
+@pytest.mark.parametrize('failure_stage', ['corpus', 'ranking', 'retrieval'])
 def test_pending_delivery_survives_new_recommendation_failure(pipeline, monkeypatch, failure_stage):
     with open_dict(pipeline):
         pipeline.output.email.enabled = True
@@ -197,6 +202,8 @@ def test_pending_delivery_survives_new_recommendation_failure(pipeline, monkeypa
         raise OSError('upstream unavailable')
     if failure_stage == 'corpus':
         monkeypatch.setattr(executor, 'fetch_zotero_corpus', fail)
+    elif failure_stage == 'retrieval':
+        monkeypatch.setattr(executor.retrievers['arxiv'], 'retrieve_papers', fail)
     else:
         monkeypatch.setattr(executor.retrievers['arxiv'], 'retrieve_papers', lambda: [make_sample_paper()])
         monkeypatch.setattr(executor.reranker, 'rerank', fail)
@@ -231,8 +238,7 @@ def test_partial_researchsquare_results_save_delivery_without_repeat(pipeline, m
     for _ in range(2):
         executor=Executor(pipeline)
         executor.retrievers={'researchsquare':SimpleNamespace(retrieve_papers=lambda:[paper], failures=['S4306402450: OpenAlex source HTTP 404'])}
-        with pytest.raises(RuntimeError, match='researchsquare: incomplete retrieval'):
-            executor.run()
+        executor.run()
     assert len(sent)==1
     state=State(pipeline.state.path)
     assert not state.pending('email') and not state.pending('rss')
@@ -265,8 +271,7 @@ def test_openalex_401_keeps_source_failure_visible_after_50_saved_summaries_are_
         executor = Executor(pipeline)
         executor.retrievers = {'journals': SimpleNamespace(retrieve_papers=lambda: papers),
                                'researchsquare': SimpleNamespace(retrieve_papers=refused)}
-        with pytest.raises(RuntimeError, match='researchsquare: OpenAlex access/budget error HTTP 401'):
-            executor.run()
+        executor.run()
     state = State(pipeline.state.path)
     assert len(sent) == 1 and synced == [50] and len(closed) == 2
     assert not state.pending('email') and len(state.records) == 50
@@ -370,18 +375,30 @@ def test_chemrxiv_pipeline_library_history_quotas_and_random(pipeline,monkeypatc
     assert sum(p['recommendation_group']=='random' for p in added)==5
 
 
-def test_arxiv_503_preserves_other_delivery_and_never_resends(pipeline,monkeypatch):
+@pytest.mark.parametrize('status', [429, 503])
+def test_arxiv_failure_preserves_other_delivery_and_never_resends(pipeline, monkeypatch, status):
     import arxiv
     pipeline.output.email.enabled=True
     pipeline.executor.send_empty=False
     sent=[]
     monkeypatch.setattr('zot2dailypaper.executor.send_email',lambda *args:sent.append(args))
-    def fail():raise arxiv.HTTPError('https://export.arxiv.org/api/query',0,503)
-    for _ in range(2):
-        executor=Executor(pipeline)
-        executor.retrievers={'arxiv':SimpleNamespace(retrieve_papers=fail),
-            'journals':SimpleNamespace(retrieve_papers=lambda:[make_sample_paper(source='journals',doi='10.1000/other')])}
-        with pytest.raises(RuntimeError,match='arxiv:.*HTTP 503'):executor.run()
+    from loguru import logger
+
+    def fail():
+        raise arxiv.HTTPError('https://export.arxiv.org/api/query', 500, status)
+
+    warnings = []
+    sink = logger.add(warnings.append, level='WARNING')
+    try:
+        for _ in range(2):
+            executor = Executor(pipeline)
+            executor.retrievers = {'arxiv': SimpleNamespace(retrieve_papers=fail),
+                'journals': SimpleNamespace(retrieve_papers=lambda: [make_sample_paper(source='journals', doi='10.1000/other')])}
+            executor.run()
+    finally:
+        logger.remove(sink)
+    assert any('Skipping failed source: arxiv:' in warning and f'HTTP {status}' in warning for warning in warnings)
+    assert any('partial source coverage' in warning for warning in warnings)
     assert len(sent)==1
     state=State(pipeline.state.path)
     assert len(state.records)==1 and not state.pending('email')
