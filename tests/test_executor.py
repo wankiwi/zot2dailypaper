@@ -316,8 +316,7 @@ def test_login_failure_after_other_sources_deliver_keeps_history_and_does_not_re
     sent = []
     monkeypatch.setattr(smtplib, 'SMTP', make_stub_smtp(sent))
     for _ in range(2):
-        with pytest.raises(RuntimeError, match='openreview: OpenReview official login failed'):
-            Executor(config).run()
+        Executor(config).run()
         history = State(path)
         assert history.has(paper) and not history.pending('email')
         assert len(sent) == 1

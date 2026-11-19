@@ -77,9 +77,9 @@ def test_retry_after_wait_is_respected(monkeypatch,header):
     if header=='45':assert waits==[45]
 
 
-def test_sdk_has_no_nested_retry_and_smaller_pages():
+def test_sdk_has_no_nested_retry_and_reduces_request_pressure():
     with module.api_client() as client:
-        assert client.num_retries==0 and client.page_size==100 and client.delay_seconds==3
+        assert client.num_retries==0 and client.page_size==250 and client.delay_seconds==10
         assert isinstance(client._session,module.ArxivSession)
         assert client._session.get_adapter('https://export.arxiv.org').max_retries.total==0
 
@@ -121,3 +121,50 @@ def test_sdk_pagination_retries_same_page_without_partial_delivery(config,monkey
         papers=retriever.retrieve_papers()
         assert [p.title for p in papers]==['Paper 1','Paper 2']
         assert calls==[0,1,1] and waits==[15]
+
+
+@pytest.mark.parametrize('rate_limited', [False, True])
+def test_large_query_reduces_requests_without_silent_partial_delivery(config, monkeypatch, rate_limited):
+    from urllib.parse import parse_qs, urlsplit
+
+    config.source.arxiv.window_days = 7
+    config.source.arxiv.category = ['cs.AI']
+    config.preprint_interests = None
+    total = 1858
+    starts = []
+    waits = []
+
+    def get(self, url, **kwargs):
+        params = parse_qs(urlsplit(url).query)
+        assert params['max_results'] == ['250']
+        start = int(params['start'][0])
+        starts.append(start)
+        response = requests.Response()
+        response._content_consumed = True
+        response.status_code = 429 if rate_limited and start == 500 else 200
+        if response.status_code == 200:
+            header = atom_page(1).split(b'<entry>', 1)[0]
+            header = (header.replace(b'>2</opensearch:totalResults>', f'>{total}</opensearch:totalResults>'.encode())
+                      .replace(b'>0</opensearch:startIndex>', f'>{start}</opensearch:startIndex>'.encode())
+                      .replace(b'>100</opensearch:itemsPerPage>', b'>250</opensearch:itemsPerPage>'))
+            entries = b''.join(b'<entry>' + atom_page(i).split(b'<entry>', 1)[1].split(b'</feed>', 1)[0]
+                               for i in range(start + 1, min(start + 250, total) + 1))
+            response._content = header + entries + b'</feed>'
+        else:
+            response._content = b''
+        return response
+
+    monkeypatch.setattr(requests.Session, 'get', get)
+    monkeypatch.setattr(module, 'sleep', waits.append)
+    monkeypatch.setattr(module.arxiv.time, 'sleep', lambda _: None)
+    retriever = module.ArxivRetriever(config)
+    if rate_limited:
+        with pytest.raises(module.arxiv.HTTPError, match='HTTP 429'):
+            retriever.retrieve_papers()
+        assert starts == [0, 250, 500]
+        assert retriever._raw == {}
+    else:
+        papers = retriever.retrieve_papers()
+        assert starts == list(range(0, total, 250))
+        assert [paper.title for paper in papers] == [f'Paper {i}' for i in range(1, total + 1)]
+    assert waits == []
