@@ -105,6 +105,11 @@ class Attempt:
     issue: str = 'usage unavailable'
     amount: Decimal | None = None
 
+    def invalidate_billing(self):
+        """Keep observed token fields, but do not price an unverified response."""
+        self.amount = None
+        self.issue = 'response billing metadata unverified'
+
     def observe(self, response):
         self.usage, self.amount, self.issue = {}, None, 'usage unavailable'
         usage = _get(response, 'usage')
@@ -178,7 +183,7 @@ class ApiCosts:
             yield event
         except BaseException as exc:
             event.failed = True
-            if not event.usage:
+            if not event.usage and event.issue == 'usage unavailable':
                 # Some failing responses include usage; retain only numeric fields.
                 event.observe(getattr(exc, 'body', None))
                 if not event.usage:

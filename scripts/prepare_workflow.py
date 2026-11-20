@@ -57,7 +57,7 @@ def prepare(root: Path, environ=os.environ):
     # Repository delivery policy overrides stale CUSTOM_CONFIG and dispatch inputs.
     # RSS remains available to explicit local callers, not these email workflows.
     config = OmegaConf.merge(config, {'output': {'email': {'enabled': True},
-                                               'rss': {'enabled': False}}})
+                                               'rss': {'enabled': False, 'path': 'public/feed.xml'}}})
     if scheduled:
         config = OmegaConf.merge(config, {'llm': {'language': 'Chinese'}, 'abstracts': {'enabled': True}})
         # Keep the daily destination in the existing secret, never in public code
@@ -77,7 +77,6 @@ def prepare(root: Path, environ=os.environ):
                                                    for name in ('journals', 'arxiv', 'biorxiv', 'medrxiv', 'researchsquare', 'openreview', 'chemrxiv')}})
     # Workflow history lives in paper-state; never rely on an immutable cache key.
     config = OmegaConf.merge(config, {'state': {'enabled': True, 'path': 'data/recommendations.json'}})
-    config = OmegaConf.merge(config, {'output': {'rss': {'path': 'public/feed.xml'}}})
     OmegaConf.save(config, root / 'config' / 'runtime.yaml')
     with initialize_config_dir(config_dir=str((root / 'config').resolve()), version_base=None):
         effective = compose(config_name='runtime')
@@ -100,7 +99,6 @@ def prepare(root: Path, environ=os.environ):
                 if effective.source[name].window_days is None:
                     defaults['window_days'] = 7 if name == 'arxiv' else 1
                 config = OmegaConf.merge(config, {'source': {name: defaults}})
-        OmegaConf.save(config, root / 'config' / 'runtime.yaml')
     selected = enabled_sources(effective)
     if not selected:
         raise ValueError('No enabled sources remain after preprint interest filtering')

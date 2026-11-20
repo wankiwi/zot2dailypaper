@@ -4,28 +4,42 @@ import re
 from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 
-def arxiv_https_url(value):
-    """Upgrade only literal official HTTP arXiv article URLs, without changing identity."""
+def _official_arxiv_article(value):
     if not isinstance(value, str) or re.search(r'[\x00-\x20\x7f\\]', value):
-        return value
+        return None
     try:
         parts = urlsplit(value)
     except ValueError:
-        return value
-    if (parts.scheme != 'http' or parts.netloc.lower() not in ('arxiv.org', 'www.arxiv.org', 'export.arxiv.org')
+        return None
+    if (parts.scheme not in ('http', 'https')
+            or parts.netloc.lower() not in ('arxiv.org', 'www.arxiv.org', 'export.arxiv.org')
             or parts.query or parts.fragment):
-        return value
+        return None
     path = re.fullmatch(r'/(abs|pdf|html)/(.+)', parts.path)
     if not path:
-        return value
+        return None
     identifier = path[2]
     if path[1] == 'pdf':
         identifier = identifier.removesuffix('.pdf')
     modern = r'\d{2}(?:0[1-9]|1[0-2])\.\d{4,5}'
     legacy = r'[a-z][a-z-]*(?:\.[A-Z]{2})?/\d{2}(?:0[1-9]|1[0-2])\d{3}'
-    if not re.fullmatch(rf'(?:{modern}|{legacy})(?:v[1-9]\d*)?', identifier, flags=re.ASCII):
+    match = re.fullmatch(rf'(?P<base>{modern}|{legacy})(?:v[1-9]\d*)?', identifier, flags=re.ASCII)
+    return (parts, match['base']) if match else None
+
+
+def arxiv_https_url(value):
+    """Upgrade only literal official HTTP arXiv article URLs, without changing identity."""
+    parsed = _official_arxiv_article(value)
+    if parsed is None or parsed[0].scheme != 'http':
         return value
+    parts, _ = parsed
     return urlunsplit(('https', parts.netloc, parts.path, '', ''))
+
+
+def stable_arxiv_id(paper):
+    """Match a valid versionless arXiv URL even when paper_id prefers a DOI."""
+    parsed = _official_arxiv_article(paper.url)
+    return 'arxiv:' + parsed[1] if parsed is not None else None
 
 
 def normalize_doi(value: str | None) -> str | None:
@@ -102,8 +116,12 @@ def deduplicate(papers):
     result, keys, titles = [], {}, {}
     for paper in papers:
         key, title = paper_id(paper), title_key(paper.title)
+        identities = [key, *('doi:'+d for d in sorted(paper_dois(paper)))]
+        arxiv_id = stable_arxiv_id(paper)
+        if arxiv_id and arxiv_id != key:
+            identities.append(arxiv_id)
         matches = []
-        for identity in [key, *('doi:'+d for d in sorted(paper_dois(paper)))]:
+        for identity in identities:
             match = keys.get(identity)
             if match is not None and all(match is not p for p in matches):matches.append(match)
         previous = matches[0] if matches else None
@@ -140,7 +158,7 @@ def deduplicate(papers):
                     previous.__dict__.update(paper.__dict__)
                 previous.related_dois = sorted(aliases - {paper_doi(previous)})
                 for alias in aliases:keys['doi:'+alias]=previous
-                keys[key]=previous
+                keys.update(dict.fromkeys(identities, previous))
                 continue
             # Prefer the published record while preserving useful preprint text.
             if paper.journal and not previous.journal:
@@ -157,14 +175,13 @@ def deduplicate(papers):
                         setattr(previous, field, list(getattr(paper, field)))
                         for suffix in ('_status', '_source', '_source_url'):
                             setattr(previous, field + suffix, getattr(paper, field + suffix))
-            keys[key] = previous
+            keys.update(dict.fromkeys(identities, previous))
             keys[paper_id(previous)] = previous
             previous.related_dois = sorted(aliases - {paper_doi(previous)})
             for alias in aliases:keys['doi:'+alias]=previous
         else:
             result.append(paper)
-            keys[key] = paper
-            for alias in paper_dois(paper):keys['doi:'+alias]=paper
+            keys.update(dict.fromkeys(identities, paper))
             if title and getattr(paper, 'source', None) != 'openreview':
                 titles[title] = paper
     return result

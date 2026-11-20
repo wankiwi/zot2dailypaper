@@ -5,27 +5,24 @@ import pytest
 
 
 @pytest.fixture()
-def mock_feedparser(monkeypatch):
-    """Patch feedparser.parse to return the local RSS fixture for arXiv URLs.
+def mock_arxiv_feed(monkeypatch):
+    """Serve the fixture without turning feedparser's byte parsing into a mock."""
+    from pathlib import Path
+    from types import SimpleNamespace
 
-    The arxiv library passes bytes (response.content) to feedparser.parse,
-    so we check for both str and bytes URL types.
+    import requests
 
-    Returns the parsed result so tests can assert against it.
-    """
-    parsed = feedparser.parse("tests/retriever/arxiv_rss_example.xml")
-    raw_parse = feedparser.parse
+    raw = (Path(__file__).parent / "arxiv_rss_example.xml").read_bytes()
+    original_get = requests.get
 
-    def _patched(url_or_bytes, *args, **kwargs):
-        target = url_or_bytes
-        if isinstance(target, bytes):
-            target = target.decode("utf-8", errors="ignore")
-        if isinstance(target, str) and "rss.arxiv.org" in target:
-            return parsed
-        return raw_parse(url_or_bytes, *args, **kwargs)
+    def get(url, **kwargs):
+        if url.startswith("https://rss.arxiv.org/atom/"):
+            from contextlib import nullcontext
+            return nullcontext(SimpleNamespace(status_code=200, content=raw))
+        return original_get(url, **kwargs)
 
-    monkeypatch.setattr(feedparser, "parse", _patched)
-    return parsed
+    monkeypatch.setattr(requests, "get", get)
+    return feedparser.parse(raw)
 
 
 @pytest.fixture()
