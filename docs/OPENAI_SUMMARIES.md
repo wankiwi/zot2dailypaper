@@ -72,7 +72,10 @@ Sources:
 The public Markdown export groups short- and long-context rates in an eleven-column
 row, unlike the six-column visible-page table. The parser accepts these two exact
 reviewed schemas only. Both forms require the exact Standard, Batch, Flex and Fast headings, complete
-model rows, USD units and ordered cache rates. Expanded rows validate both context
+model rows, USD units and ordered cache rates. The public Markdown checked on
+2026-11-20 labels Flex with the standalone `### Flex pricing data` heading; the
+older nested `#### Flex` heading still works. They are aliases of one tier,
+so a Luna row under both headings is rejected as ambiguous. Expanded rows validate both context
 groups. Missing, duplicated or unknown tiers/columns and mixed table schemas fail
 closed rather than silently applying the seed. A legacy Batch-only table cannot
 substitute discount rates for the Standard requests. The admission code independently

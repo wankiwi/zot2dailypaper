@@ -10,10 +10,26 @@ from zot2dailypaper import budget, openai_pricing as prices
 
 RAW = "Prices per 1M tokens.\n\n### Standard pricing data\n\n| Model | Short context input | Short context output | Short context cached input | Short context 30m write | Short context 12h write | Long context input | Long context output | Long context cached input | Long context 30m write | Long context 12h write |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| gpt-6-luna | $0.10 | $0.50 | $0.01 | $0.125 | $0.25 | $0.20 | $0.75 | $0.02 | $0.25 | $0.50 |\n\n### Batch pricing data\n\n#### Batch\n\n| Model | Short context input | Short context output | Short context cached input | Short context 30m write | Short context 12h write | Long context input | Long context output | Long context cached input | Long context 30m write | Long context 12h write |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| gpt-6-luna | $0.05 | $0.25 | $0.005 | $0.0625 | $0.125 | $0.10 | $0.375 | $0.01 | $0.125 | $0.25 |\n\n#### Flex\n\n| Model | Short context input | Short context output | Short context cached input | Short context 30m write | Short context 12h write | Long context input | Long context output | Long context cached input | Long context 30m write | Long context 12h write |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| gpt-6-luna | $0.05 | $0.25 | $0.005 | $0.0625 | $0.125 | $0.10 | $0.375 | $0.01 | $0.125 | $0.25 |\n\n### Fast pricing data\n\n| Model | Short context input | Short context output | Short context cached input | Short context 30m write | Short context 12h write | Long context input | Long context output | Long context cached input | Long context 30m write | Long context 12h write |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| gpt-6-luna | $0.20 | $1.00 | $0.02 | $0.25 | $0.50 | $0.40 | $1.50 | $0.04 | $0.50 | $1.00 |\n"
 FAST = RAW[RAW.index('### Fast pricing data'):]
+# Official Markdown on 2026-11-20 gives Batch and Flex separate top-level
+# headings; the reviewed Luna rows and all prices remain unchanged.
+CURRENT_RAW = RAW.replace('\n#### Batch\n', '').replace('#### Flex', '### Flex pricing data')
+CURRENT_FLEX = CURRENT_RAW[CURRENT_RAW.index('### Flex pricing data'):CURRENT_RAW.index('### Fast pricing data')]
 
-def test_current_raw_markdown_preserves_short_request_ceiling():
-    assert prices.parse_prices(RAW) == {
+@pytest.mark.parametrize('raw', [RAW, CURRENT_RAW])
+def test_reviewed_raw_markdown_preserves_short_request_ceiling(raw):
+    assert prices.parse_prices(raw) == {
         'input_usd_per_million': '0.50', 'output_usd_per_million': '1.00'}
+
+@pytest.mark.parametrize('bad, reason', [
+    (CURRENT_RAW.replace('### Flex pricing data', '### Unreviewed Flex pricing data'), 'tier_changed'),
+    (CURRENT_RAW.replace(CURRENT_FLEX, ''), 'tiers_incomplete'),
+    (CURRENT_RAW.replace(CURRENT_FLEX, CURRENT_FLEX.replace('Short context output', 'Other')), 'columns_changed'),
+    (CURRENT_RAW + CURRENT_FLEX.replace('### Flex pricing data', '#### Flex'), 'tier_changed'),
+])
+def test_new_flex_heading_does_not_relax_tier_validation(bad, reason):
+    with pytest.raises(prices.QuoteUnavailable, match=reason):
+        prices.parse_prices(bad)
+
 
 @pytest.mark.parametrize('bad', [
     RAW.replace('Short context output', 'Short context unknown'),
