@@ -4,6 +4,9 @@ import re
 from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 
+ARXIV_BASE_ID = r'(?:\d{2}(?:0[1-9]|1[0-2])\.\d{4,5}|[a-z][a-z-]*(?:\.[A-Z]{2})?/\d{2}(?:0[1-9]|1[0-2])\d{3})'
+
+
 def _official_arxiv_article(value):
     if not isinstance(value, str) or re.search(r'[\x00-\x20\x7f\\]', value):
         return None
@@ -21,9 +24,7 @@ def _official_arxiv_article(value):
     identifier = path[2]
     if path[1] == 'pdf':
         identifier = identifier.removesuffix('.pdf')
-    modern = r'\d{2}(?:0[1-9]|1[0-2])\.\d{4,5}'
-    legacy = r'[a-z][a-z-]*(?:\.[A-Z]{2})?/\d{2}(?:0[1-9]|1[0-2])\d{3}'
-    match = re.fullmatch(rf'(?P<base>{modern}|{legacy})(?:v[1-9]\d*)?', identifier, flags=re.ASCII)
+    match = re.fullmatch(rf'(?P<base>{ARXIV_BASE_ID})(?:v[1-9]\d*)?', identifier, flags=re.ASCII)
     return (parts, match['base']) if match else None
 
 
@@ -40,6 +41,22 @@ def stable_arxiv_id(paper):
     """Match a valid versionless arXiv URL even when paper_id prefers a DOI."""
     parsed = _official_arxiv_article(paper.url)
     return 'arxiv:' + parsed[1] if parsed is not None else None
+
+
+def validated_arxiv_aliases(values):
+    # Historical aliases are derived from URLs during deduplication; don't
+    # accept arbitrary keys, versions, paths or strings from saved state.
+    if not isinstance(values, (list, tuple, set)):
+        return set()
+    return {value for value in values if isinstance(value, str)
+            and re.fullmatch(rf'arxiv:{ARXIV_BASE_ID}', value, flags=re.ASCII)}
+
+
+def paper_arxiv_ids(paper):
+    aliases = validated_arxiv_aliases(getattr(paper, '_dedup_arxiv_aliases', ()))
+    if direct := stable_arxiv_id(paper):
+        aliases.add(direct)
+    return aliases
 
 
 def normalize_doi(value: str | None) -> str | None:
@@ -117,9 +134,7 @@ def deduplicate(papers):
     for paper in papers:
         key, title = paper_id(paper), title_key(paper.title)
         identities = [key, *('doi:'+d for d in sorted(paper_dois(paper)))]
-        arxiv_id = stable_arxiv_id(paper)
-        if arxiv_id and arxiv_id != key:
-            identities.append(arxiv_id)
+        identities.extend(sorted(paper_arxiv_ids(paper) - {key}))
         matches = []
         for identity in identities:
             match = keys.get(identity)
@@ -147,6 +162,7 @@ def deduplicate(papers):
                 previous = match
         if previous is not None:
             aliases = paper_dois(previous) | paper_dois(paper)
+            arxiv_aliases = paper_arxiv_ids(previous) | paper_arxiv_ids(paper)
             different_versions = bool(paper_doi(previous) and paper_doi(paper) and normalize_doi(previous.doi or previous.url) != normalize_doi(paper.doi or paper.url))
             if different_versions:
                 # Linked preprint and publication share recommendation identity, not text.
@@ -157,6 +173,7 @@ def deduplicate(papers):
                 if (paper.journal and not previous.journal) or newer_chemrxiv:
                     previous.__dict__.update(paper.__dict__)
                 previous.related_dois = sorted(aliases - {paper_doi(previous)})
+                previous._dedup_arxiv_aliases = arxiv_aliases
                 for alias in aliases:keys['doi:'+alias]=previous
                 keys.update(dict.fromkeys(identities, previous))
                 continue
@@ -178,6 +195,7 @@ def deduplicate(papers):
             keys.update(dict.fromkeys(identities, previous))
             keys[paper_id(previous)] = previous
             previous.related_dois = sorted(aliases - {paper_doi(previous)})
+            previous._dedup_arxiv_aliases = arxiv_aliases
             for alias in aliases:keys['doi:'+alias]=previous
         else:
             result.append(paper)
