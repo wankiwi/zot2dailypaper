@@ -55,7 +55,8 @@ def parse_prices(text):
     rates=[]; tiers=set(); schema=None
     headings={'### Standard pricing data':'standard',
               '### Batch pricing data':'batch','#### Batch':'batch',
-              '#### Flex':'flex','### Fast pricing data':'fast'}
+              '### Flex pricing data':'flex','#### Flex':'flex',
+              '### Fast pricing data':'fast'}
     for line in text.splitlines():
         stripped=line.strip()
         if stripped.startswith('#'):
