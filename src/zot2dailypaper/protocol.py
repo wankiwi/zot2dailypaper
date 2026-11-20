@@ -153,7 +153,11 @@ class Paper:
                     **kwargs
                 )
                 cost.observe(response)
-                audit_response(response, kwargs['model'])
+                try:
+                    audit_response(response, kwargs['model'])
+                except BudgetUnavailable:
+                    cost.invalidate_billing()
+                    raise
                 finish = getattr(response.choices[0], 'finish_reason', None)
                 if finish != 'stop':
                     raise SummaryUnavailable({'length': 'output_truncated', 'content_filter': 'content_filtered'}.get(finish, 'invalid_response')

@@ -51,6 +51,7 @@ jobs:
       - name: Install locked dependencies
         run: uv sync --frozen
       - name: Restore delivery history
+        id: restore-delivery-history
         run: uv run --frozen python scripts/workflow_state.py restore
       - name: Prepare runtime configuration
         env:
@@ -101,7 +102,8 @@ jobs:
           ZOTERO_WORKER_D1_TOKEN: ${{ secrets.ZOTERO_WORKER_D1_TOKEN }}
         run: uv run --frozen python -m zot2dailypaper.main --config-name=runtime
       - name: Save successful and pending deliveries
-        if: ${{ always() && !cancelled() }}
+        # Keep partial delivery results, but never publish a partial restore.
+        if: ${{ always() && !cancelled() && steps.restore-delivery-history.outcome == 'success' }}
         run: uv run --frozen python scripts/workflow_state.py save
       - name: Seal private embedding cache
         id: seal-embedding-cache

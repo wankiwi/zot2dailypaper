@@ -8,7 +8,7 @@ import requests
 from omegaconf import open_dict
 
 from zot2dailypaper.retriever import arxiv_retriever as module
-from zot2dailypaper.identity import deduplicate
+from zot2dailypaper.identity import deduplicate, paper_id, stable_arxiv_id
 
 
 def entry(number, primary='cs.AI', title=None):
@@ -142,6 +142,28 @@ def test_debug_limit_and_version_dedup_remain_supported(config, monkeypatch):
     assert len(papers) == 10
     from dataclasses import replace
     assert len(deduplicate([papers[0], replace(papers[0], url=papers[0].url.replace('v1', 'v2'))])) == 1
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+def test_arxiv_new_doi_and_title_do_not_split_versions(reverse):
+    from zot2dailypaper.protocol import Paper
+
+    v1 = Paper('arxiv', 'Early title', [], 'Original abstract', 'https://arxiv.org/abs/2611.01234v1')
+    v2 = Paper('arxiv', 'Revised title', [], 'Revised abstract',
+               'https://export.arxiv.org/pdf/2611.01234v2.pdf', doi='10.1234/published')
+    assert paper_id(v1) == 'arxiv:2611.01234'
+    assert paper_id(v2) == 'doi:10.1234/published'
+    merged = deduplicate([v2, v1] if reverse else [v1, v2])
+    assert len(merged) == 1
+    assert paper_id(merged[0]) == 'doi:10.1234/published'
+
+
+@pytest.mark.parametrize('url', [
+    'https://other.example/abs/2611.01234v2', 'https://arxiv.org.evil.example/abs/2611.01234v2',
+    'https://name@arxiv.org/abs/2611.01234v2', 'https://arxiv.org/abs/invalid',
+])
+def test_doi_arxiv_alias_requires_a_literal_official_article_url(url):
+    assert stable_arxiv_id(SimpleNamespace(url=url)) is None
 
 
 def test_full_100_entry_page_and_final_short_page_are_complete(config, monkeypatch):

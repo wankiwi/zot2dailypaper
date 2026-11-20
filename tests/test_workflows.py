@@ -364,6 +364,20 @@ preprint_interests:
     assert OmegaConf.to_container(config.email, resolve=False)['receiver'] == '${oc.env:RECEIVER}'
 
 
+def test_daily_persists_partial_delivery_only_after_successful_history_restore():
+    import yaml
+
+    workflow = yaml.load((ROOT / '.github/workflows/main.yml').read_text(), Loader=yaml.BaseLoader)
+    steps = {step['name']: step for step in workflow['jobs']['recommend']['steps'] if 'name' in step}
+    restore = steps['Restore delivery history']
+    save = steps['Save successful and pending deliveries']
+    assert restore['id'] == 'restore-delivery-history'
+    # A retrieval or SMTP failure can leave useful pending/accepted records.
+    # A failed or skipped restore must not overwrite durable remote state.
+    assert save['if'] == ("${{ always() && !cancelled() && "
+                          "steps.restore-delivery-history.outcome == 'success' }}")
+
+
 def test_daily_schedule_uses_requested_utc_time():
     import yaml
 

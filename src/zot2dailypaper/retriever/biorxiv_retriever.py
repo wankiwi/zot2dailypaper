@@ -88,6 +88,8 @@ class BiorxivRetriever(BaseRetriever):
         records = []
         cursor = 0
         expected_total = None
+        seen_versions = set()
+        since_iso, until_iso = since.isoformat(), until.isoformat()
         for _ in range(max_pages):
             query = '' if category == '*' else '?' + urlencode({'category': category})
             response = client.get(f'https://api.biorxiv.org/details/{self.server}/{since}/{until}/{cursor}{query}',
@@ -114,12 +116,25 @@ class BiorxivRetriever(BaseRetriever):
                 break
             if statuses - {None, 'ok'}:
                 raise RuntimeError(f'{self.name} API returned a failure status')
+            reported_cursor = messages[0].get('cursor') if messages else None
+            if reported_cursor is not None and (
+                    not str(reported_cursor).isascii() or not str(reported_cursor).isdigit()
+                    or int(reported_cursor) != cursor):
+                raise RuntimeError(f'{self.name} API pagination cursor mismatch at offset {cursor}')
             collection = result['collection']
             if not isinstance(collection, list) or any(not isinstance(c, dict) for c in collection):
                 raise ValueError(f'{self.name} API collection must be a list of objects')
             for item in collection:
-                if since.isoformat() <= item.get('date', '') <= until.isoformat():
-                    records.append(item)
+                if not since_iso <= item.get('date', '') <= until_iso:
+                    continue
+                doi = normalize_doi(item.get('doi'))
+                version = item.get('version')
+                if doi and version is not None:
+                    identity = doi, str(version)
+                    if identity in seen_versions:
+                        raise RuntimeError(f'{self.name} API pagination repeated a paper version at offset {cursor}')
+                    seen_versions.add(identity)
+                records.append(item)
             cursor += len(collection)
             if expected_total is not None and cursor >= expected_total:
                 break

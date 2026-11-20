@@ -111,3 +111,26 @@ def test_medrxiv_inherits_recovery_without_changing_server(config, monkeypatch):
     calls = client(monkeypatch, [requests.ReadTimeout(), page([record])])
     assert r._retrieve_raw_papers() == [record]
     assert all('/details/medrxiv/' in url for url, _ in calls)
+
+
+@pytest.mark.parametrize('reported_cursor,error', [(0, 'cursor mismatch'), (1, 'repeated a paper version')])
+def test_repeated_page_cannot_look_complete(config, monkeypatch, reported_cursor, error):
+    r = retriever(config, categories=['*'])
+    record = item('same')
+    first, second = page([record], 2), page([record], 2)
+    first['messages'][0]['cursor'] = '0'
+    second['messages'][0]['cursor'] = reported_cursor
+    calls = client(monkeypatch, [first, second])
+    with pytest.raises(RuntimeError, match=error):
+        r._retrieve_raw_papers()
+    assert [url.rsplit('/', 1)[1] for url, _ in calls] == ['0', '1']
+
+
+def test_provider_cursor_strings_and_distinct_versions_are_valid(config, monkeypatch):
+    r = retriever(config, categories=['*'])
+    old, new = item('both', version=1), item('both', version=2)
+    first, second = page([old], 2), page([new], 2)
+    first['messages'][0]['cursor'] = '0'
+    second['messages'][0]['cursor'] = '1'
+    client(monkeypatch, [first, second])
+    assert r._retrieve_raw_papers() == [new]

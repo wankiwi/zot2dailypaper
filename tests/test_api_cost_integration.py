@@ -105,6 +105,50 @@ def test_invalid_summary_still_reports_measured_spend(config):
     assert request_guard.api_costs.attempts[0].failed
 
 
+@pytest.mark.parametrize('response_changes, expected_input', [
+    ({'service_tier': 'unreviewed'}, 100),
+    ({'usage': {'prompt_tokens': 300_000, 'completion_tokens': 20, 'total_tokens': 300_020}}, 300_000),
+    ({'usage': None}, None),
+])
+def test_failed_billing_audit_keeps_usage_but_never_prices_it(config, response_changes, expected_input):
+    endpoint = 'https://api.openai.com/v1'
+    model = 'gpt-6-luna'
+    schedule = summary_schedule({
+        'host': 'api.openai.com', 'model': model,
+        'input_cny_per_million': '3.70', 'output_cny_per_million': '7.40',
+        'quote_version': 'synthetic-test', 'verified_on': budget.utc_day(),
+        'valid_through': budget.utc_day(), 'conversion_note': 'Synthetic quote',
+    })
+    request_guard = budget.BudgetRequests('.30', '.0049728', budget.utc_day(),
+                                          expected_model=model, expected_endpoint=endpoint,
+                                          price_schedule=schedule)
+    cfg = chat_config(config)
+    cfg.api.base_url = endpoint
+    cfg.generation_kwargs.model = model
+    response = body(model=model, **response_changes)
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, json=response)
+
+    paper, following = make_sample_paper(), make_sample_paper()
+    with sdk(handler, endpoint) as client:
+        paper.generate_tldr(client, cfg, request_guard)
+        following.generate_tldr(client, cfg, request_guard)
+
+    assert len(calls) == paper.tldr_attempts == 1 and following.tldr_attempts == 0
+    assert paper.tldr_error_reason == following.tldr_error_reason == 'billing_unverified'
+    assert paper.tldr == paper.abstract
+    assert request_guard.remaining == 0
+    event, = request_guard.api_costs.attempts
+    assert event.failed and event.amount is None
+    assert event.usage.get('input') == expected_input
+    lines = '\n'.join(request_guard.api_costs.lines())
+    assert '1/1 attempts have unknown cost' in lines
+    assert 'response billing metadata unverified' in lines
+
+
 def test_failing_http_response_usage_is_measured_even_when_sdk_extracts_nested_error(config):
     result = body()
     result['error'] = {'message': 'PRIVATE_PROVIDER_BODY'}

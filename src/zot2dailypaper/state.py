@@ -4,7 +4,8 @@ from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 
-from .identity import arxiv_https_url, paper_doi, paper_dois, paper_id, title_key
+from .identity import (arxiv_https_url, paper_arxiv_ids, paper_doi, paper_dois,
+                       paper_id, title_key, validated_arxiv_aliases)
 from .protocol import Paper
 from .scores import upgrade_scores
 
@@ -48,33 +49,49 @@ class State:
                 raise ValueError('Unsupported or corrupt recommendation state; preserve file and investigate')
             cutoff = utcnow() - timedelta(days=retention_days)
             for record in data['records'].values():
-                if datetime.fromisoformat(record['added']) < cutoff:
+                channels = record.get('channels', {})
+                if not isinstance(channels, dict):
+                    raise ValueError('Invalid delivery channels in recommendation state; preserve file and investigate')
+                unresolved = bool(record.get('email_attempt') and not channels.get('email'))
+                if datetime.fromisoformat(record['added']) < cutoff and not unresolved:
                     continue
                 # Rebuild keys when identity normalization changes. Pending deliveries
                 # must still be markable without resending already delivered records.
                 paper = load_paper(record['paper'])
-                record = dict(record, paper=paper_dict(paper))
+                record = dict(record, paper=paper_dict(paper), channels=dict(channels))
                 key = paper_id(paper)
                 if key in self.records:
-                    channels = self.records[key].setdefault('channels', {})
-                    for channel, delivered in record.get('channels', {}).items():
-                        channels[channel] = channels.get(channel, False) or delivered
-                    if record.get('email_attempt'):
-                        self.records[key]['email_attempt'] = record['email_attempt']
+                    existing = self.records[key]
+                    merged_channels = existing.setdefault('channels', {})
+                    for channel, delivered in channels.items():
+                        merged_channels[channel] = merged_channels.get(channel, False) or delivered
+                    saved_paper = load_paper(existing['paper'])
+                    aliases = paper_dois(saved_paper) | paper_dois(paper)
+                    existing['paper']['related_dois'] = sorted(aliases - {paper_doi(saved_paper)})
+                    self._retain_arxiv_aliases(existing, validated_arxiv_aliases(record.get('arxiv_aliases'))
+                                               | paper_arxiv_ids(paper))
+                    if merged_channels.get('email'):
+                        existing.pop('email_attempt', None)
+                    elif record.get('email_attempt'):
+                        existing['email_attempt'] = record['email_attempt']
                 else:
                     self.records[key] = record
 
         self.titles = {}
         self.dois = set()
+        self.arxiv_ids = set()
         for record in self.records.values():
             paper = load_paper(record['paper'])
             self.dois.update(paper_dois(paper))
+            self.arxiv_ids.update(paper_arxiv_ids(paper) | validated_arxiv_aliases(record.get('arxiv_aliases')))
             self.titles.setdefault(title_key(paper.title), set()).add(paper_doi(paper))
 
     def has(self, paper):
         doi = paper_doi(paper)
         matches = self.titles.get(title_key(paper.title), set())
-        return bool(paper_dois(paper) & self.dois) or paper_id(paper) in self.records or bool(matches and (not doi or None in matches or doi in matches))
+        return (bool(paper_dois(paper) & self.dois) or paper_id(paper) in self.records
+                or bool(paper_arxiv_ids(paper) & self.arxiv_ids)
+                or bool(matches and (not doi or None in matches or doi in matches)))
 
     def assert_email_delivery_safe(self):
         if any(record.get('email_attempt') and not record.get('channels', {}).get('email')
@@ -86,11 +103,21 @@ class State:
             self.assert_email_delivery_safe()
         return [load_paper(v['paper']) for v in self.records.values() if not v.get('channels', {}).get(channel)]
 
+    @staticmethod
+    def _retain_arxiv_aliases(record, aliases):
+        # Keep transport/replay paper payload and primary key unchanged.
+        aliases |= validated_arxiv_aliases(record.get('arxiv_aliases'))
+        if aliases:
+            record['arxiv_aliases'] = sorted(aliases)
+
     def add(self, papers):
         for paper in papers:
             self.dois.update(paper_dois(paper))
+            aliases = paper_arxiv_ids(paper)
+            self.arxiv_ids.update(aliases)
             self.titles.setdefault(title_key(paper.title), set()).add(paper_doi(paper))
-            self.records.setdefault(paper_id(paper), {'added': utcnow().isoformat(), 'paper': paper_dict(paper), 'channels': {}})
+            record = self.records.setdefault(paper_id(paper), {'added': utcnow().isoformat(), 'paper': paper_dict(paper), 'channels': {}})
+            self._retain_arxiv_aliases(record, aliases)
 
     def mark(self, papers, channel):
         for paper in papers:

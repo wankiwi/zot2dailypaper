@@ -325,11 +325,18 @@ class ArxivRetriever(BaseRetriever):
             return results
         query = '+'.join(categories)
         logger.info(f'arXiv query: mode=RSS, categories={categories}')
-        include_cross_list = self.config.source.arxiv.get("include_cross_list", False)
-        # Get the latest paper from arxiv rss feed
-        feed = feedparser.parse(f"https://rss.arxiv.org/atom/{query}")
+        include_cross_list = self.retriever_config.get("include_cross_list", False)
+        # Fetch explicitly: feedparser's URL helper can return an empty result
+        # for a failed request, indistinguishable from a quiet day downstream.
+        with requests.get(f"https://rss.arxiv.org/atom/{query}", timeout=(5, 20),
+                          allow_redirects=False) as response:
+            if response.status_code != 200:
+                raise ArxivFeedError(f'arXiv announcement feed returned HTTP {response.status_code}')
+            feed = feedparser.parse(response.content)
+        if feed.bozo or not feed.version:
+            raise ArxivFeedError('arXiv announcement response is not a complete RSS/Atom feed')
         if 'Feed error for query' in feed.feed.get('title', ''):
-            raise Exception(f"Invalid ARXIV_QUERY: {query}.")
+            raise ArxivFeedError(f'Invalid ARXIV_QUERY: {query}.')
         raw_papers = []
         allowed_announce_types = {"new", "cross"} if include_cross_list else {"new"}
         all_paper_ids = [

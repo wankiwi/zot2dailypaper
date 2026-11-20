@@ -2,6 +2,9 @@
 
 import time
 from types import SimpleNamespace
+from contextlib import nullcontext
+
+import pytest
 
 
 from zot2dailypaper.retriever.arxiv_retriever import ArxivRetriever, _run_with_hard_timeout
@@ -17,14 +20,14 @@ def _raise_runtime_error() -> None:
     raise RuntimeError("boom")
 
 
-def test_arxiv_retriever(config, mock_feedparser, monkeypatch):
+def test_arxiv_retriever(config, mock_arxiv_feed, monkeypatch):
     monkeypatch.setattr("zot2dailypaper.retriever.base.sleep", lambda _: None)
 
     # The RSS fixture gives us paper IDs.  After feedparser, the code calls
     # arxiv.Client().results(search) which makes real HTTP requests.  We mock
     # the arxiv Client so the test stays offline.
     new_entries = [
-        e for e in mock_feedparser.entries
+        e for e in mock_arxiv_feed.entries
         if e.get("arxiv_announce_type", "new") == "new"
     ]
 
@@ -59,6 +62,35 @@ def test_arxiv_retriever(config, mock_feedparser, monkeypatch):
 
     assert len(papers) == len(new_entries)
     assert set(p.title for p in papers) == set(e.title for e in new_entries)
+
+
+@pytest.mark.parametrize("status,content,error", [
+    (403, b"", "HTTP 403"),
+    (429, b"", "HTTP 429"),
+    (503, b"", "HTTP 503"),
+    (200, b"<html><body>Temporary error</body></html>", "not a complete RSS/Atom feed"),
+    (200, b'<feed xmlns="http://www.w3.org/2005/Atom"><entry>', "not a complete RSS/Atom feed"),
+])
+def test_failed_announcement_feed_is_not_recorded_as_empty_success(config, monkeypatch, status, content, error):
+    def get(url, **kwargs):
+        assert url.startswith("https://rss.arxiv.org/atom/")
+        assert kwargs == {"timeout": (5, 20), "allow_redirects": False}
+        return nullcontext(SimpleNamespace(status_code=status, content=content))
+
+    monkeypatch.setattr(arxiv_retriever.requests, "get", get)
+    monkeypatch.setattr(arxiv_retriever, "record_health", lambda *args: pytest.fail("Must not record failed feed"))
+    with pytest.raises(arxiv_retriever.ArxivFeedError, match=error):
+        ArxivRetriever(config).retrieve_papers()
+
+
+def test_valid_empty_announcement_feed_is_successful(config, monkeypatch):
+    content = b'<feed xmlns="http://www.w3.org/2005/Atom"><title>Latest papers</title></feed>'
+    monkeypatch.setattr(arxiv_retriever.requests, "get", lambda *args, **kwargs:
+                        nullcontext(SimpleNamespace(status_code=200, content=content)))
+    health = []
+    monkeypatch.setattr(arxiv_retriever, "record_health", lambda *args: health.append(args[2]))
+    assert ArxivRetriever(config).retrieve_papers() == []
+    assert len(health) == 1 and health[0]["api_entries"] == 0
 
 
 def test_run_with_hard_timeout_returns_value():
